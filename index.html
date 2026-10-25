@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Echo dev</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/theme/material-darker.css">
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="auth.css">
 </head>
 <body>
 
@@ -23,11 +24,48 @@
   </div>
 
   <header>
+    <button id="codeToggle" type="button">Code</button>
     <h1>Echo dev</h1>
     <button id="logoutBtn" type="button">Quitter</button>
   </header>
 
+  <!-- Espace de travail (onglet Code) -->
+  <section id="workspace">
+    <div id="wsBar">
+      <select id="wsFile"></select>
+      <button id="wsNew" type="button" title="Nouveau fichier">+</button>
+      <button id="wsReload" type="button" title="Recharger depuis GitHub">↻</button>
+      <button id="wsSave" type="button">Enregistrer</button>
+    </div>
+    <div id="wsInfo">
+      <div id="wsStatus"></div>
+      <button id="wsLive" type="button" title="Édition à plusieurs en direct">Live</button>
+    </div>
+    <div id="wsPeers" class="hidden"></div>
+    <div id="wsEditor"></div>
+
+    <div id="wsProposal" class="hidden">
+      <div id="wsExplain"></div>
+      <div id="wsDiff"></div>
+      <div id="wsProposalButtons">
+        <button id="wsApply" type="button">Appliquer</button>
+        <button id="wsReject" type="button" class="secondary">Refuser</button>
+      </div>
+    </div>
+
+    <div id="wsAsk">
+      <input id="wsPrompt" type="text" placeholder="Demande à Gemini de modifier ce fichier…" autocomplete="off">
+      <button id="wsAskBtn" type="button">Demander</button>
+    </div>
+  </section>
+
   <main id="messages"></main>
+
+  <!-- Barre "Répondre à…" (affichée quand on touche un message) -->
+  <div id="replyBar" class="hidden">
+    <div id="replyText"></div>
+    <button id="cancelReply" type="button" aria-label="Annuler la réponse">✕</button>
+  </div>
 
   <footer>
     <input
@@ -39,7 +77,47 @@
     <button id="sendBtn" type="button">Envoyer</button>
   </footer>
 
+  <!-- Menu du message (appui long / clic droit) -->
+  <div id="msgMenu" class="hidden">
+    <button type="button" data-action="reply">Répondre</button>
+    <button type="button" data-action="copy">Copier</button>
+    <button type="button" data-action="edit">Modifier</button>
+    <button type="button" data-action="info">Informations</button>
+    <button type="button" data-action="delete" class="danger">Supprimer</button>
+  </div>
+
+  <!-- Fenêtre d'informations -->
+  <div id="infoModal" class="hidden">
+    <div id="infoCard">
+      <div id="infoBody"></div>
+      <button type="button" id="infoClose">Fermer</button>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <!-- Éditeur de code (CodeMirror 5) -->
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/xml/xml.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/javascript/javascript.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/css/css.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/htmlmixed/htmlmixed.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/python/python.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/sql/sql.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/shell/shell.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/addon/edit/closebrackets.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/addon/edit/matchbrackets.js"></script>
+
+  <!-- Yjs (fusion des modifications en direct) : chargé en module puis exposé en global -->
+  <script type="module">
+    import * as Y from "https://esm.sh/yjs@13";
+    window.Y = Y;
+    window.dispatchEvent(new Event("yjs-ready"));
+  </script>
+
   <script src="script.js"></script>
+  <script src="collab.js"></script>
+  <script src="workspace.js"></script>
 </body>
 </html>
