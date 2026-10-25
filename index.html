@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Echo dev</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+
+  <!-- Écran de connexion -->
+  <div id="loginScreen">
+    <form id="loginForm">
+      <h2>Echo dev</h2>
+      <input type="text" id="usernameInput" placeholder="Pseudo (seulement pour créer un compte)" autocomplete="username" maxlength="20">
+      <input type="email" id="emailInput" placeholder="Email" required autocomplete="email">
+      <input type="password" id="passwordInput" placeholder="Mot de passe (6 caractères min.)" required autocomplete="current-password">
+      <button type="submit">Se connecter</button>
+      <button type="button" id="signupBtn" class="secondary">Créer un compte</button>
+      <p id="loginError" class="error"></p>
+    </form>
+  </div>
+
+  <header>
+    <h1>Echo dev</h1>
+    <button id="logoutBtn" type="button">Quitter</button>
+  </header>
+
+  <main id="messages"></main>
+
+  <footer>
+    <input
+      type="text"
+      id="messageInput"
+      placeholder="Tape un message... (@ai pour l'IA)"
+      autocomplete="off"
+    >
+    <button id="sendBtn" type="button">Envoyer</button>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="script.js"></script>
+</body>
+</html>

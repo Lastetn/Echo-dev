@@ -1,0 +1,94 @@
+/* À charger après style.css */
+
+.hidden {
+  display: none !important;
+}
+
+/* Connexion */
+
+#loginScreen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 20px;
+  background: var(--bg);
+}
+
+#loginForm {
+  width: 100%;
+  max-width: 340px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#loginForm h2 {
+  text-align: center;
+  color: #8b5cf6;
+  margin-bottom: 8px;
+}
+
+.error {
+  min-height: 1.2em;
+  color: #f87171;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.error.ok {
+  color: #4ade80;
+}
+
+#loginForm button.secondary {
+  background: var(--surface-light);
+  border: 1px solid var(--border);
+}
+
+/* Header */
+
+header {
+  position: relative;
+}
+
+#logoutBtn {
+  position: absolute;
+  right: 12px;
+
+  padding: 8px 12px;
+  font-size: 0.85rem;
+
+  background: var(--surface-light);
+}
+
+/* Messages */
+
+.message .author {
+  display: block;
+
+  margin-bottom: 2px;
+
+  font-size: 0.72rem;
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.message.system {
+  align-self: center;
+
+  background: transparent;
+  color: var(--text-secondary);
+
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.message.typing {
+  opacity: 0.7;
+  font-style: italic;
+}

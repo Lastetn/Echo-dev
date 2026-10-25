@@ -1,0 +1,176 @@
+
+:root {
+  --bg: #0f0f14;
+  --surface: #171720;
+  --surface-light: #22222e;
+
+  --text: #f5f5f7;
+  --text-secondary: #a1a1aa;
+
+  --accent: #6d5dfc;
+  --accent-hover: #7c6dff;
+
+  --ai: #0ea5e9;
+  --other: #252535;
+
+  --border: #2c2c3a;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: Inter, Arial, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+
+header {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #8b5cf6;
+}
+
+/* Messages */
+
+#messages {
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  padding: 15px;
+
+  overflow-y: auto;
+}
+
+.message {
+  max-width: 80%;
+  padding: 12px 16px;
+
+  border-radius: 18px;
+
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.me {
+  align-self: flex-end;
+
+  background: var(--accent);
+  color: white;
+
+  border-bottom-right-radius: 5px;
+}
+
+.other {
+  align-self: flex-start;
+
+  background: var(--other);
+  color: white;
+
+  border-bottom-left-radius: 5px;
+}
+
+.ai {
+  align-self: flex-start;
+
+  background: var(--ai);
+  color: white;
+
+  border-bottom-left-radius: 5px;
+}
+
+/* Footer */
+
+footer {
+  display: flex;
+  gap: 10px;
+
+  padding: 12px;
+
+  background: var(--surface);
+
+  border-top: 1px solid var(--border);
+}
+
+/* Input */
+
+input {
+  flex: 1;
+
+  padding: 12px 16px;
+
+  background: var(--surface-light);
+  color: var(--text);
+
+  border: 1px solid var(--border);
+  border-radius: 14px;
+
+  outline: none;
+}
+
+input::placeholder {
+  color: var(--text-secondary);
+}
+
+input:focus {
+  border-color: var(--accent);
+}
+
+/* Bouton */
+
+button {
+  padding: 12px 18px;
+
+  border: none;
+  border-radius: 14px;
+
+  cursor: pointer;
+
+  color: white;
+
+  background: linear-gradient(
+    135deg,
+    #8b5cf6,
+    #3b82f6
+  );
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+/* Scrollbar */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 20px;
+}
