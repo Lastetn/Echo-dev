@@ -176,6 +176,11 @@ async function start(user) {
   await loadProfiles();
   await loadHistory();
   subscribe();
+
+  // Réinscription silencieuse si la permission a déjà été accordée
+  if (pushSupported && Notification.permission === "granted") {
+    enablePush().catch(() => {});
+  }
 }
 
 function stop() {
@@ -202,9 +207,12 @@ function stop() {
 }
 
 // ====== DONNÉES ======
+let devs = []; // pseudos des comptes dev
+
 async function loadProfiles() {
-  const { data } = await db.from("profiles").select("id, username");
+  const { data } = await db.from("profiles").select("id, username, is_dev");
   (data ?? []).forEach((p) => (profiles[p.id] = p.username));
+  devs = (data ?? []).filter((p) => p.is_dev).map((p) => p.username);
 }
 
 async function loadHistory() {
@@ -291,9 +299,30 @@ function renderBody(m) {
     el.innerHTML = DOMPurify.sanitize(html, { FORBID_TAGS: ["img", "style"] });
   } else {
     el.className = "plain";
-    el.textContent = m.content; // textContent = pas d'injection HTML
+    el.replaceChildren(highlightMentions(m.content)); // pas d'injection HTML
   }
   return el;
+}
+
+function highlightMentions(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  text.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9_]{3,20})/g, (full, pre, name, offset) => {
+    const start = offset + pre.length;
+    frag.append(text.slice(last, start));
+    if (devs.some((d) => d.toLowerCase() === name.toLowerCase())) {
+      const s = document.createElement("span");
+      s.className = "mention";
+      s.textContent = "@" + name;
+      frag.append(s);
+    } else {
+      frag.append("@" + name);
+    }
+    last = start + name.length + 1;
+    return full;
+  });
+  frag.append(text.slice(last));
+  return frag;
 }
 
 function buildMessage(m) {
@@ -865,6 +894,81 @@ async function askAI(question) {
     sendTypingEvent(false, "ai");
   }
 }
+
+const mentionMenu = document.getElementById("mentionMenu");
+let mentionItems = [];
+let mentionIdx = 0;
+
+function hideMentions() {
+  mentionMenu.classList.add("hidden");
+  mentionItems = [];
+}
+
+function currentMention() {
+  const pos = input.selectionStart ?? input.value.length;
+  const m = input.value.slice(0, pos).match(/(^|\s)@([A-Za-z0-9_]*)$/);
+  return m ? { start: pos - m[2].length - 1, end: pos, q: m[2].toLowerCase() } : null;
+}
+
+function renderMentions() {
+  mentionMenu.replaceChildren(
+    ...mentionItems.map((name, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "@" + name;
+      if (i === mentionIdx) b.classList.add("active");
+      b.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); // garde le focus sur le champ
+        applyMention(name);
+      });
+      return b;
+    })
+  );
+}
+
+function updateMentions() {
+  const r = currentMention();
+  const me_name = profiles[me?.id];
+  mentionItems = r
+    ? devs.filter((d) => d.toLowerCase().startsWith(r.q) && d !== me_name && d.toLowerCase() !== "ai").slice(0, 6)
+    : [];
+  if (!mentionItems.length) return hideMentions();
+  mentionIdx = 0;
+  mentionMenu.classList.remove("hidden");
+  renderMentions();
+}
+
+function applyMention(name) {
+  const r = currentMention();
+  if (!r) return;
+  const v = input.value;
+  input.value = v.slice(0, r.start) + "@" + name + " " + v.slice(r.end);
+  const p = r.start + name.length + 2;
+  input.setSelectionRange(p, p);
+  hideMentions();
+  input.focus();
+}
+
+input.addEventListener("input", updateMentions);
+input.addEventListener("blur", () => setTimeout(hideMentions, 150));
+
+// À placer AU DÉBUT du listener keydown existant de #messageInput
+input.addEventListener("keydown", (e) => {
+  if (!mentionMenu.classList.contains("hidden")) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = mentionItems.length;
+      mentionIdx = (mentionIdx + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      return renderMentions();
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      return applyMention(mentionItems[mentionIdx]);
+    }
+    if (e.key === "Escape") return hideMentions();
+  }
+  // ...le code existant (Enter pour envoyer) continue ici
+});
 
 sendBtn.addEventListener("click", sendMessage);
 

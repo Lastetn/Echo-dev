@@ -31,6 +31,7 @@
     <h1>Echo dev</h1>
     <span id="unreadBadge" class="hidden"></span>
     <button id="logoutBtn" type="button">Quitter</button>
+    <button id="notifBtn" type="button" class="hidden" title="Activer les notifications">🔔</button>
   </header>
 
   <!-- Espace de travail (onglet Code) -->
@@ -106,6 +107,8 @@
     <button id="cancelReply" type="button" aria-label="Annuler la réponse">✕</button>
   </div>
 
+  <div id="mentionMenu" class="hidden"></div>
+
   <footer>
     <input
       type="text"
@@ -179,6 +182,7 @@
   <script src="script.js"></script>
   <script src="collab.js"></script>
   <script src="workspace.js"></script>
+  <script src="push.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
