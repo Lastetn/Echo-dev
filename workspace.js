@@ -17,6 +17,8 @@
   const askBtn = document.getElementById("wsAskBtn");
   const liveBtn = document.getElementById("wsLive");
   const peersEl = document.getElementById("wsPeers");
+  const ctxChips = document.getElementById("wsCtxChips");
+  const ctxSelect = document.getElementById("wsCtxAdd");
 
   // Explorateur
   const treeEl = document.getElementById("wsTree");
@@ -37,7 +39,8 @@
   let dirty = false;
   let loading = false; // vrai quand on remplit l'éditeur par code
   let treeLoading = false;
-  let pending = null; // proposition de Gemini { base, content, path }
+  let pendingMulti = null; // proposition de Gemini { explanation, changes:[...], skipped }
+  let extraCtx = []; // fichiers ajoutés au contexte de Gemini (en plus du fichier ouvert)
   let liveOn = false; // mode "Live" activé
   let baseText = ""; // dernier contenu connu sur GitHub (sert au live)
 
@@ -277,6 +280,7 @@
       empty.className = "tree-empty";
       empty.textContent = "Dépôt vide. Crée un fichier avec ＋.";
       treeEl.appendChild(empty);
+      renderCtx();
       return;
     }
 
@@ -322,6 +326,7 @@
       }
     };
     draw(root, 0);
+    renderCtx();
   }
 
   async function loadTree() {
@@ -795,7 +800,64 @@
   }
   saveBtn.addEventListener("click", saveFile);
 
-  // ---------- Gemini : propositions ----------
+  // ---------- Gemini : contexte (plusieurs fichiers) ----------
+  function renderCtx() {
+    ctxChips.innerHTML = "";
+    extraCtx = extraCtx.filter((p) => paths.includes(p) && p !== current?.path);
+
+    const chip = (label, onRemove) => {
+      const el = document.createElement("span");
+      el.className = "ctx-chip" + (onRemove ? "" : " locked");
+      const t = document.createElement("span");
+      t.textContent = label;
+      el.appendChild(t);
+      if (onRemove) {
+        const x = document.createElement("button");
+        x.type = "button";
+        x.textContent = "✕";
+        x.setAttribute("aria-label", "Retirer " + label);
+        x.addEventListener("click", onRemove);
+        el.appendChild(x);
+      }
+      ctxChips.appendChild(el);
+    };
+    if (current) chip(current.path + " (ouvert)", null);
+    extraCtx.forEach((p) =>
+      chip(p, () => {
+        extraCtx = extraCtx.filter((x) => x !== p);
+        renderCtx();
+      })
+    );
+
+    ctxSelect.innerHTML = "";
+    ctxSelect.add(new Option("+ Ajouter un fichier au contexte", ""));
+    realFiles()
+      .filter((p) => p !== current?.path && !extraCtx.includes(p))
+      .forEach((p) => ctxSelect.add(new Option(p, p)));
+    ctxSelect.value = "";
+    ctxSelect.disabled = ctxSelect.options.length <= 1;
+  }
+
+  ctxSelect.addEventListener("change", () => {
+    const p = ctxSelect.value;
+    if (!p) return;
+    extraCtx.push(p);
+    renderCtx();
+  });
+
+  // Lit le contenu actuel des fichiers du contexte (le fichier ouvert vient de l'éditeur)
+  async function gatherFiles() {
+    const files = [];
+    if (current) files.push({ path: current.path, content: cm.getValue(), sha: current.sha });
+    for (const p of extraCtx) {
+      if (current && p === current.path) continue;
+      const d = await callFn("github", { action: "read", path: p });
+      files.push({ path: p, content: d.content, sha: d.sha });
+    }
+    return files;
+  }
+
+  // ---------- Gemini : diff ----------
   function computeDiff(a, b) {
     const A = a.split("\n");
     const B = b.split("\n");
@@ -854,19 +916,19 @@
     return { rows, changed: true };
   }
 
-  function addDiffRow(type, text) {
+  function addDiffRow(container, type, text) {
     const div = document.createElement("div");
     div.className = "diff-" + type;
     div.textContent = (type === "add" ? "+ " : type === "del" ? "- " : "  ") + text;
-    diffEl.appendChild(div);
+    container.appendChild(div);
   }
 
-  function renderDiff(rows) {
-    diffEl.innerHTML = "";
+  function renderDiffInto(container, rows) {
+    container.innerHTML = "";
     let i = 0;
     while (i < rows.length) {
       if (rows[i][0] !== "ctx") {
-        addDiffRow(rows[i][0], rows[i][1]);
+        addDiffRow(container, rows[i][0], rows[i][1]);
         i++;
         continue;
       }
@@ -874,57 +936,199 @@
       while (k < rows.length && rows[k][0] === "ctx") k++;
       const run = rows.slice(i, k);
       if (run.length > 6) {
-        run.slice(0, 2).forEach((r) => addDiffRow("ctx", r[1]));
+        run.slice(0, 2).forEach((r) => addDiffRow(container, "ctx", r[1]));
         const sep = document.createElement("div");
         sep.className = "diff-sep";
         sep.textContent = "⋯ " + (run.length - 4) + " lignes identiques ⋯";
-        diffEl.appendChild(sep);
-        run.slice(-2).forEach((r) => addDiffRow("ctx", r[1]));
+        container.appendChild(sep);
+        run.slice(-2).forEach((r) => addDiffRow(container, "ctx", r[1]));
       } else {
-        run.forEach((r) => addDiffRow("ctx", r[1]));
+        run.forEach((r) => addDiffRow(container, "ctx", r[1]));
       }
       i = k;
     }
   }
 
-  function showProposal(base, d) {
-    const diff = computeDiff(base, d.new_content);
-    pending = { base, content: d.new_content, path: current.path };
-    explainEl.textContent = d.explanation || "Proposition de Gemini";
-    if (diff.changed) {
-      renderDiff(diff.rows);
-      applyBtn.classList.remove("hidden");
-    } else {
-      diffEl.innerHTML = "";
-      addDiffRow("ctx", "Aucun changement proposé.");
-      applyBtn.classList.add("hidden");
+  // ---------- Gemini : propositions (plusieurs fichiers, une case par fichier) ----------
+  const ACTION_LABEL = {
+    update: ["MODIFIER", "act-update"],
+    create: ["CRÉER", "act-create"],
+    delete: ["SUPPRIMER", "act-delete"],
+  };
+
+  function showProposal(files, d) {
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    const changes = [];
+    let skipped = d.skipped ?? 0;
+
+    for (const c of d.changes ?? []) {
+      const base = byPath.get(c.path);
+      let action = c.action;
+      if (base && action === "create") action = "update"; // le fichier existe déjà
+      if (!base && action !== "create") {
+        skipped++; // fichier non fourni : impossible à modifier
+        continue;
+      }
+      // Fichier jamais enregistré sur GitHub : c'est une création
+      if (base && !base.sha && action === "update") action = "create";
+
+      changes.push({
+        path: c.path,
+        action,
+        content: action === "delete" ? "" : c.content,
+        base: base ? base.content : "",
+        expected_sha: base ? base.sha : null,
+        checked: true,
+      });
     }
+
+    pendingMulti = {
+      explanation: d.explanation || "Proposition de Gemini",
+      changes,
+      skipped,
+    };
+    renderProposal();
     proposalEl.classList.remove("hidden");
     if (cm) cm.refresh();
   }
 
+  function renderProposal() {
+    const p = pendingMulti;
+    explainEl.textContent =
+      p.explanation + (p.skipped ? " (" + p.skipped + " changement(s) ignoré(s))" : "");
+    diffEl.innerHTML = "";
+
+    if (!p.changes.length) {
+      const none = document.createElement("div");
+      none.className = "diff-ctx";
+      none.textContent = "Aucun changement proposé.";
+      diffEl.appendChild(none);
+    }
+
+    p.changes.forEach((c) => {
+      const block = document.createElement("div");
+      block.className = "change";
+
+      const head = document.createElement("label");
+      head.className = "change-head";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = c.checked;
+      cb.addEventListener("change", () => {
+        c.checked = cb.checked;
+        updateApplyBtn();
+      });
+      const [label, cls] = ACTION_LABEL[c.action];
+      const badge = document.createElement("span");
+      badge.className = "act " + cls;
+      badge.textContent = label;
+      const name = document.createElement("span");
+      name.className = "change-path";
+      name.textContent = c.path;
+      head.append(cb, badge, name);
+      block.appendChild(head);
+
+      const body = document.createElement("div");
+      body.className = "change-diff";
+      const rows =
+        c.action === "create" ? c.content.split("\n").map((l) => ["add", l])
+        : c.action === "delete" ? c.base.split("\n").map((l) => ["del", l])
+        : computeDiff(c.base, c.content).rows;
+      renderDiffInto(body, rows.length ? rows : [["ctx", "(aucun changement de contenu)"]]);
+      block.appendChild(body);
+
+      diffEl.appendChild(block);
+    });
+
+    updateApplyBtn();
+  }
+
+  function updateApplyBtn() {
+    const n = pendingMulti ? pendingMulti.changes.filter((c) => c.checked).length : 0;
+    applyBtn.disabled = n === 0;
+    applyBtn.textContent = n
+      ? "Appliquer (" + n + " fichier" + (n > 1 ? "s" : "") + ", 1 commit)"
+      : "Appliquer";
+  }
+
   function hideProposal() {
-    pending = null;
+    pendingMulti = null;
     proposalEl.classList.add("hidden");
     if (cm) cm.refresh();
   }
 
-  applyBtn.addEventListener("click", () => {
-    if (!pending) return;
-    if (current?.path !== pending.path) {
-      hideProposal();
-      return setStatus("Le fichier ouvert a changé : proposition annulée.", "error");
-    }
+  // Enregistre toutes les modifications cochées sur GitHub, en un seul commit
+  async function applyProposal() {
+    const p = pendingMulti;
+    if (!p) return;
+    const sel = p.changes.filter((c) => c.checked);
+    if (!sel.length) return;
+
+    const openChange = current ? sel.find((c) => c.path === current.path) : null;
     if (
-      cm.getValue() !== pending.base &&
-      !confirm("Le fichier a été modifié depuis ta demande. Remplacer quand même ?")
+      openChange &&
+      openChange.action !== "delete" &&
+      cm.getValue() !== openChange.base &&
+      !confirm(
+        "Le fichier ouvert a été modifié depuis ta demande : sa version actuelle sera remplacée par celle de Gemini. Continuer ?"
+      )
     ) {
       return;
     }
-    cm.setValue(pending.content); // marque le fichier comme modifié (annulable avec Ctrl+Z)
-    hideProposal();
-  });
 
+    const sign = { update: "~ ", create: "+ ", delete: "- " };
+    const list = sel.map((c) => sign[c.action] + c.path).join("\n");
+    if (
+      !confirm(
+        "Enregistrer " + sel.length + " modification(s) sur GitHub en un seul commit ?\n\n" + list
+      )
+    ) {
+      return;
+    }
+
+    if (liveOn) setLive(false); // le live ne suit pas un commit multi-fichiers
+    applyBtn.disabled = true;
+    setStatus("Enregistrement du commit…");
+    try {
+      const d = await callFn("github", {
+        action: "apply",
+        message: p.explanation.slice(0, 180),
+        changes: sel.map((c) => ({
+          path: c.path,
+          action: c.action,
+          content: c.content,
+          expected_sha: c.expected_sha,
+        })),
+      });
+
+      hideProposal();
+      if (openChange) {
+        if (openChange.action === "delete") {
+          closeCurrent();
+        } else {
+          loading = true;
+          cm.setValue(openChange.content);
+          cm.clearHistory();
+          loading = false;
+          baseText = openChange.content;
+          dirty = false;
+          current.sha = d.shas?.[openChange.path] ?? current.sha;
+        }
+      }
+
+      await loadTree(); // liste à jour (créations, suppressions)
+      refreshStatus();
+      setStatus(
+        sel.length + " fichier(s) enregistré(s) sur GitHub ✔ (commit " + String(d.commit).slice(0, 7) + ")",
+        "ok"
+      );
+    } catch (e) {
+      setStatus("Application impossible : " + e.message, "error");
+      updateApplyBtn();
+    }
+  }
+
+  applyBtn.addEventListener("click", applyProposal);
   rejectBtn.addEventListener("click", hideProposal);
 
   async function askGemini() {
@@ -932,17 +1136,17 @@
     if (!instruction) return;
     if (!current) return setStatus("Ouvre d'abord un fichier.", "error");
 
-    const base = cm.getValue();
     askBtn.disabled = true;
-    setStatus("Gemini réfléchit…");
+    setStatus("Gemini lit les fichiers…");
     try {
+      const files = await gatherFiles();
+      setStatus("Gemini réfléchit…");
       const d = await callFn("code-ai", {
-        path: current.path,
-        content: base,
+        files: files.map(({ path, content }) => ({ path, content })),
         instruction,
         tree: realFiles().slice(0, 400),
       });
-      showProposal(base, d);
+      showProposal(files, d);
       promptInput.value = "";
       refreshStatus();
     } catch (e) {
@@ -1056,10 +1260,13 @@
     firstTreeLoad = true;
     current = null;
     dirty = false;
-    pending = null;
+    pendingMulti = null;
+    extraCtx = [];
     proposalEl.classList.add("hidden");
     treeEl.innerHTML = "";
     rowEls.clear();
+    ctxChips.innerHTML = "";
+    ctxSelect.innerHTML = "";
     promptInput.value = "";
     if (cm) fillEditor("", "");
     updateCurrentLabel();

@@ -667,9 +667,123 @@ body.code-mode footer {
   font-size: 0.78rem;
 }
 
-#wsDiff div {
+#wsDiff .change-diff div {
   padding: 1px 8px;
   white-space: pre;
+}
+
+/* Gemini : contexte multi-fichiers et propositions */
+
+#wsCtx {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 0;
+  background: var(--surface);
+}
+
+#wsCtxChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#wsCtxChips:empty { display: none; }
+
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+
+  border-radius: 999px;
+  background: var(--surface-light);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.ctx-chip.locked { color: var(--text-secondary); }
+
+.ctx-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.ctx-chip button {
+  padding: 0 6px;
+  background: transparent;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+#wsCtxAdd {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+
+  background: var(--surface-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  font-size: 0.82rem;
+}
+
+#wsCtxAdd:disabled { opacity: 0.5; }
+
+.change {
+  border-bottom: 1px solid var(--border);
+}
+
+.change:last-child { border-bottom: none; }
+
+.change-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 8px 10px;
+  background: var(--surface-light);
+
+  font-family: Inter, Arial, sans-serif;
+  font-size: 0.85rem;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.change-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.act {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #0f0f14;
+}
+
+.act-update { background: #fbbf24; }
+.act-create { background: #4ade80; }
+.act-delete { background: #f87171; }
+
+.change-diff {
+  max-height: 260px;
+  overflow: auto;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .diff-add { background: rgba(74, 222, 128, 0.15); color: #86efac; }

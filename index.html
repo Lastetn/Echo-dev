@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/theme/material-darker.css">
   <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#000000">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
 </head>
 <body>
 
@@ -70,6 +73,11 @@
             <button id="wsApply" type="button">Appliquer</button>
             <button id="wsReject" type="button" class="secondary">Refuser</button>
           </div>
+        </div>
+
+        <div id="wsCtx">
+          <div id="wsCtxChips"></div>
+          <select id="wsCtxAdd" aria-label="Ajouter un fichier au contexte"></select>
         </div>
 
         <div id="wsAsk">
@@ -170,5 +178,12 @@
   <script src="script.js"></script>
   <script src="collab.js"></script>
   <script src="workspace.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js');
+      });
+    }
+  </script>
 </body>
 </html>
