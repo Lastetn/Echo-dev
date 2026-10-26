@@ -11,6 +11,7 @@
   const proposalEl = document.getElementById("wsProposal");
   const explainEl = document.getElementById("wsExplain");
   const diffEl = document.getElementById("wsDiff");
+  const sqlProposalEl = document.getElementById("wsSqlProposal");
   const applyBtn = document.getElementById("wsApply");
   const rejectBtn = document.getElementById("wsReject");
   const promptInput = document.getElementById("wsPrompt");
@@ -949,6 +950,71 @@
     }
   }
 
+  // ---------- Journal des mises à jour (ajouté automatiquement à chaque proposition) ----------
+  const LOG_PATH = "logs_updates_gemini.md";
+  const LOG_CONTEXT_CHARS = 10000; // taille du journal envoyée à Gemini (les plus récentes sont en haut)
+  const LOG_HEADER = "# Journal des Mises à Jour (Gemini)\n\nÀ chaque intervention de l'assistant IA, un résumé est ajouté ici.\n";
+
+  function formatLogEntry(entry, touched) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const date = pad(now.getDate()) + "/" + pad(now.getMonth() + 1) + "/" + now.getFullYear();
+    return (
+      "### [Date - " + date + "] - " + (entry.title || "Mise à jour") + "\n" +
+      "- **Modifications :** " + (entry.modifications || "(voir le commit)") + "\n" +
+      "- **Fichiers touchés :** " + touched.join(", ") + "\n" +
+      "- **Résumé :** " + (entry.summary || "") + "\n\n---\n"
+    );
+  }
+
+  // Insère l'entrée au-dessus de la plus récente (juste avant le premier "### [")
+  // Le modèle de format (### [Date - JJ/MM/AAAA] - [Titre]) reste en place : les entrées vont juste après son "---"
+  function insertLogEntry(text, entryText) {
+    const tpl = text.search(/^### \[Date - JJ\/MM\/AAAA\]/m);
+    if (tpl !== -1) {
+      const sep = text.indexOf("\n---", tpl);
+      if (sep !== -1) {
+        const cut = sep + "\n---".length;
+        const before = text.slice(0, cut);
+        const after = text.slice(cut).replace(/^\s+/, "");
+        return before + "\n\n" + entryText + "\n" + after;
+      }
+    }
+    const idx = text.search(/^### \[/m);
+    if (idx === -1) return text.replace(/\s*$/, "") + "\n\n" + entryText;
+    return text.slice(0, idx) + entryText + "\n" + text.slice(idx);
+  }
+
+  // Ajoute une entrée au journal sur GitHub (commit séparé), utilisé pour les migrations SQL
+  async function appendToLog(entry, touched) {
+    let text = LOG_HEADER + "\n";
+    let sha = null;
+    try {
+      const l = await callFn("github", { action: "read", path: LOG_PATH });
+      text = l.content;
+      sha = l.sha;
+    } catch (_) {} // absent : sha reste null (création)
+    const content = insertLogEntry(text, formatLogEntry(entry, touched));
+    const d = await callFn("github", {
+      action: "write",
+      path: LOG_PATH,
+      content,
+      sha,
+      message: "Journal : " + String(entry.title || "mise à jour").slice(0, 100),
+    });
+    if (current?.path === LOG_PATH && !dirty) {
+      current.sha = d.sha;
+      baseText = content;
+      fillEditor(LOG_PATH, content);
+      refreshStatus();
+    }
+    if (!paths.includes(LOG_PATH)) {
+      paths.push(LOG_PATH);
+      paths.sort();
+      renderTree();
+    }
+  }
+
   // ---------- Gemini : propositions (plusieurs fichiers, une case par fichier) ----------
   const ACTION_LABEL = {
     update: ["MODIFIER", "act-update"],
@@ -962,6 +1028,7 @@
     let skipped = d.skipped ?? 0;
 
     for (const c of d.changes ?? []) {
+      if (c.path === LOG_PATH) continue; // le journal est géré ci-dessous, pas par Gemini
       const base = byPath.get(c.path);
       let action = c.action;
       if (base && action === "create") action = "update"; // le fichier existe déjà
@@ -982,10 +1049,30 @@
       });
     }
 
+    // Journal : une entrée ajoutée à chaque proposition qui modifie des fichiers
+    if (changes.length) {
+      const logFile = byPath.get(LOG_PATH);
+      const entry = d.logEntry || { title: d.explanation || "Modification", modifications: "", summary: d.explanation || "" };
+      const base = logFile ? logFile.content : "";
+      const content = insertLogEntry(
+        logFile ? logFile.content : LOG_HEADER + "\n",
+        formatLogEntry(entry, changes.map((c) => c.path))
+      );
+      changes.push({
+        path: LOG_PATH,
+        action: logFile?.sha ? "update" : "create",
+        content,
+        base,
+        expected_sha: logFile?.sha ?? null,
+        checked: true,
+      });
+    }
+
     pendingMulti = {
       explanation: d.explanation || "Proposition de Gemini",
       changes,
       skipped,
+      sqlMigration: normalizeSqlMigration(d.sqlMigration),
     };
     renderProposal();
     proposalEl.classList.remove("hidden");
@@ -1041,6 +1128,7 @@
     });
 
     updateApplyBtn();
+    renderSqlMigration(pendingMulti?.sqlMigration);
   }
 
   function updateApplyBtn() {
@@ -1054,8 +1142,156 @@
   function hideProposal() {
     pendingMulti = null;
     proposalEl.classList.add("hidden");
+    if (sqlProposalEl) sqlProposalEl.classList.add("hidden");
     if (cm) cm.refresh();
   }
+
+  // ---------- Migration SQL proposée (affichage seulement : jamais exécutée, jamais envoyée à "apply") ----------
+  function normalizeSqlMigration(value) {
+    if (!value || typeof value !== "object") {
+      return {
+        required: false,
+        summary: "Aucune migration SQL nécessaire.",
+        sql: "",
+        warnings: []
+      };
+    }
+  
+    const required = value.required === true;
+    return {
+      required,
+      summary: typeof value.summary === "string" ? value.summary : "",
+      sql: required && typeof value.sql === "string" ? value.sql : "",
+      warnings: Array.isArray(value.warnings)
+        ? value.warnings.filter((item) => typeof item === "string")
+        : []
+    };
+  }
+  
+  function renderSqlMigration(migration) {
+    const host = document.getElementById("wsSqlProposal");
+    if (!host) return;
+  
+    const sql = normalizeSqlMigration(migration);
+    host.replaceChildren();
+  
+    if (!sql.required || !sql.sql.trim()) {
+      host.classList.add("hidden");
+      return;
+    }
+  
+    host.classList.remove("hidden");
+  
+    const heading = document.createElement("div");
+    heading.className = "ws-sql-heading";
+    heading.textContent = "Migration SQL proposée";
+  
+    const summary = document.createElement("p");
+    summary.className = "ws-sql-summary";
+    summary.textContent = sql.summary || "Gemini propose une modification de la base de données.";
+  
+    const warning = document.createElement("p");
+    warning.className = "ws-sql-safety";
+    warning.textContent =
+      "À vérifier avant exécution. Le SQL ne part sur la base que si tu le confirmes ici, et il n'est jamais inclus dans le commit du code.";
+  
+    const code = document.createElement("pre");
+    code.className = "ws-sql-code";
+    const codeText = document.createElement("code");
+    codeText.textContent = sql.sql;
+    code.appendChild(codeText);
+  
+    const actions = document.createElement("div");
+    actions.className = "ws-sql-actions";
+  
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "secondary";
+    copyButton.textContent = "Copier le SQL";
+    copyButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(sql.sql);
+        copyButton.textContent = "SQL copié";
+        window.setTimeout(() => {
+          copyButton.textContent = "Copier le SQL";
+        }, 1600);
+      } catch (error) {
+        console.error("Copie du SQL impossible :", error);
+        copyButton.textContent = "Copie impossible";
+      }
+    });
+  
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.className = "secondary";
+    downloadButton.textContent = "Télécharger .sql";
+    downloadButton.addEventListener("click", () => {
+      const blob = new Blob([sql.sql], { type: "text/sql;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "echo-dev-migration.sql";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    });
+  
+    const runButton = document.createElement("button");
+    runButton.type = "button";
+    runButton.className = "danger-action";
+    runButton.textContent = "Exécuter sur Supabase";
+    runButton.addEventListener("click", async () => {
+      const ok = confirm(
+        "Exécuter ce SQL sur la base Supabase ?\n\n" +
+        "Il est lancé dans une transaction : en cas d'erreur, rien n'est modifié. " +
+        "Une fois validé, le changement reste en place.\n\n" +
+        sql.sql.slice(0, 1500) + (sql.sql.length > 1500 ? "\n…" : "")
+      );
+      if (!ok) return;
+      runButton.disabled = true;
+      runButton.textContent = "Exécution…";
+      try {
+        await callFn("run-sql", { sql: sql.sql, confirm: "EXECUTER" });
+        runButton.textContent = "Exécuté ✔";
+        setStatus("Migration SQL exécutée sur Supabase ✔", "ok");
+        try {
+          await appendToLog(
+            {
+              title: "Migration SQL",
+              modifications: sql.summary || "Migration SQL appliquée sur Supabase",
+              summary: sql.summary || "",
+            },
+            ["base Supabase (SQL)"]
+          );
+          setStatus("Migration SQL exécutée et consignée dans le journal ✔", "ok");
+        } catch (logErr) {
+          setStatus("SQL exécuté, mais journal non mis à jour : " + logErr.message, "error");
+        }
+      } catch (e) {
+        runButton.disabled = false;
+        runButton.textContent = "Exécuter sur Supabase";
+        setStatus("Migration SQL non exécutée : " + e.message, "error");
+      }
+    });
+
+    actions.append(runButton, copyButton, downloadButton);
+    host.append(heading, summary, warning);
+  
+    if (sql.warnings.length) {
+      const warningList = document.createElement("ul");
+      warningList.className = "ws-sql-warnings";
+      for (const message of sql.warnings) {
+        const item = document.createElement("li");
+        item.textContent = message;
+        warningList.appendChild(item);
+      }
+      host.appendChild(warningList);
+    }
+  
+    host.append(code, actions);
+  }
+
 
   // Enregistre toutes les modifications cochées sur GitHub, en un seul commit
   async function applyProposal() {
@@ -1140,9 +1376,20 @@
     setStatus("Gemini lit les fichiers…");
     try {
       const files = await gatherFiles();
+      // Le journal est toujours lu : Gemini le reçoit en contexte (entrées récentes en haut), et on y ajoute l'entrée de cette demande
+      if (paths.includes(LOG_PATH) && !files.some((f) => f.path === LOG_PATH)) {
+        try {
+          const l = await callFn("github", { action: "read", path: LOG_PATH });
+          files.push({ path: LOG_PATH, content: l.content, sha: l.sha });
+        } catch (_) {}
+      }
       setStatus("Gemini réfléchit…");
       const d = await callFn("code-ai", {
-        files: files.map(({ path, content }) => ({ path, content })),
+        files: files.map(({ path, content }) =>
+          path === LOG_PATH
+            ? { path, content: content.slice(0, LOG_CONTEXT_CHARS) + (content.length > LOG_CONTEXT_CHARS ? "\n…(journal tronqué)" : "") }
+            : { path, content }
+        ),
         instruction,
         tree: realFiles().slice(0, 400),
       });

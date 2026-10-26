@@ -1270,3 +1270,74 @@ body.code-mode #newPill {
   background: #444;
   border-radius: 20px;
 }
+
+/* Ajouter à la fin de style.css */
+.ws-sql-proposal {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color, rgba(140, 140, 160, 0.35));
+  border-radius: 12px;
+  background: var(--panel-bg, rgba(120, 120, 140, 0.07));
+  min-width: 0;
+}
+
+.ws-sql-proposal.hidden {
+  display: none !important;
+}
+
+.ws-sql-heading {
+  font-weight: 700;
+  margin-bottom: 0.45rem;
+}
+
+.ws-sql-summary {
+  margin: 0 0 0.6rem;
+  overflow-wrap: anywhere;
+}
+
+.ws-sql-safety {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ws-sql-warnings {
+  margin: 0 0 0.8rem;
+  padding-left: 1.3rem;
+}
+
+.ws-sql-warnings li {
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+}
+
+.ws-sql-code {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgba(140, 140, 160, 0.25));
+  background: var(--code-bg, rgba(0, 0, 0, 0.2));
+  white-space: pre;
+  overflow-wrap: normal;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ws-sql-code code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.ws-sql-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+button.danger-action {
+  background: #b91c1c;
+}
