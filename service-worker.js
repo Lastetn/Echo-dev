@@ -2,13 +2,13 @@ const CACHE_VERSION = 'echodev-v2'; // à incrémenter à chaque modif des asset
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/script.js',
-  '/colab.js',
-  '/workspace.js',
-  '/icon-echodev.png',
+  './',
+  './index.html',
+  './style.css',
+  './script.js',
+  './colab.js',
+  './workspace.js',
+  './icon-echodev.png',
 ];
 
 self.addEventListener('install', (event) => {
