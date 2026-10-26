@@ -701,6 +701,118 @@ button.secondary {
   border-top: 1px solid var(--border);
 }
 
+/* Chat : "écrit…", nouveaux messages, heure */
+
+#typingInfo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  min-height: 22px;
+  padding: 2px 16px;
+
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+#typingInfo.idle { display: none; }
+
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+
+  opacity: 0.3;
+  animation: dotPulse 1.2s infinite ease-in-out;
+}
+
+.dots i:nth-child(2) { animation-delay: 0.2s; }
+.dots i:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dotPulse {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+#newPill {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 90px;
+  z-index: 12;
+
+  padding: 8px 14px;
+  border-radius: 999px;
+
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+#toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+
+  width: min(92%, 420px);
+  padding: 10px 14px;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: var(--surface-light);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#unreadBadge {
+  position: absolute;
+  right: 62px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+
+  font-size: 0.72rem;
+  line-height: 22px;
+  text-align: center;
+}
+
+body.code-mode #typingInfo,
+body.code-mode #newPill {
+  display: none !important;
+}
+
+.message .time {
+  display: block;
+  margin-top: 2px;
+
+  font-size: 0.68rem;
+  text-align: right;
+  opacity: 0.6;
+}
+
 /* Explorateur de fichiers */
 
 #wsCurrent {

@@ -40,6 +40,12 @@ const menuDelete = msgMenu.querySelector('[data-action="delete"]');
 const infoModal = document.getElementById("infoModal");
 const infoBody = document.getElementById("infoBody");
 const infoClose = document.getElementById("infoClose");
+const typingInfo = document.getElementById("typingInfo");
+const typingText = document.getElementById("typingText");
+const newPill = document.getElementById("newPill");
+const toastEl = document.getElementById("toast");
+const unreadBadge = document.getElementById("unreadBadge");
+const codeToggleBtn = document.getElementById("codeToggle");
 
 // ====== ÉTAT ======
 let me = null;
@@ -48,6 +54,11 @@ let subscription = null;
 let started = false;
 let profiles = {}; // id -> username
 let typingEl = null;
+let roomReady = false; // canal temps réel connecté (nécessaire pour envoyer "écrit…")
+const typers = new Map(); // clé (id d'utilisateur ou "ai") -> { name, ai, timer }
+let lastTypingSent = 0;
+let unread = 0; // messages reçus et pas encore vus
+let toastTimer = null;
 let replyTo = null; // message auquel on répond
 let editing = null; // message en cours de modification
 let menuMsg = null; // message ciblé par le menu
@@ -176,6 +187,11 @@ function stop() {
   byId.clear();
   els.clear();
   profiles = {};
+  roomReady = false;
+  clearAllTypers();
+  unread = 0;
+  updateUnreadUI();
+  hideToast();
   closeMenu();
   replyTo = null;
   editing = null;
@@ -200,7 +216,7 @@ async function loadHistory() {
     .limit(100);
 
   if (error) return showSystem("Erreur de chargement : " + error.message);
-  (data ?? []).reverse().forEach(addMessage);
+  (data ?? []).reverse().forEach((m) => addMessage(m));
 }
 
 function subscribe() {
@@ -213,7 +229,10 @@ function subscribe() {
       async (payload) => {
         const m = payload.new;
         if (m.author_id && !profiles[m.author_id]) await loadProfiles();
-        addMessage(m);
+        // Le message est arrivé : son auteur n'est plus "en train d'écrire"
+        if (m.author_id) clearTyper(m.author_id);
+        if (m.role === "ai") clearTyper("ai");
+        addMessage(m, true);
       }
     )
     .on(
@@ -227,7 +246,24 @@ function subscribe() {
       { event: "DELETE", schema: "public", table: "messages" },
       (payload) => removeMessage(payload.old.id)
     )
-    .subscribe();
+    // "En train d'écrire" : messages éphémères (non enregistrés en base)
+    .on("broadcast", { event: "typing" }, ({ payload }) => {
+      if (!payload?.key || payload.key === me?.id) return;
+      setTyper(String(payload.key), String(payload.name ?? "…").slice(0, 30), Boolean(payload.ai));
+    })
+    .on("broadcast", { event: "stop" }, ({ payload }) => {
+      if (payload?.key) clearTyper(String(payload.key));
+    })
+    .subscribe((status) => {
+      roomReady = status === "SUBSCRIBED";
+    });
+}
+
+function sendTypingEvent(on, key, name, ai = false) {
+  if (!roomReady || !subscription) return;
+  subscription
+    .send({ type: "broadcast", event: on ? "typing" : "stop", payload: { key, name, ai } })
+    .catch(() => {});
 }
 
 // ====== AFFICHAGE ======
@@ -292,6 +328,16 @@ function buildMessage(m) {
 
   div.appendChild(renderBody(m));
 
+  // Heure d'envoi (complète au survol)
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = new Date(m.created_at).toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  time.title = fmtDate(m.created_at);
+  div.appendChild(time);
+
   if (m.edited_at) {
     const tag = document.createElement("span");
     tag.className = "edited";
@@ -308,13 +354,19 @@ function buildMessage(m) {
   return div;
 }
 
-function addMessage(m) {
+// live = vrai pour un message reçu en temps réel (déclenche les notifications)
+function addMessage(m, live = false) {
   if (byId.has(m.id)) return;
+  const wasNearBottom = isNearBottom(); // à mesurer avant d'ajouter le message
   byId.set(m.id, m);
   const div = buildMessage(m);
   els.set(m.id, div);
   messagesEl.appendChild(div);
-  scrollToBottom();
+
+  const mine = m.author_id === me?.id;
+  // On ne tire pas l'utilisateur vers le bas s'il relit d'anciens messages
+  if (!live || mine || wasNearBottom) scrollToBottom();
+  if (live && !mine) noteIncoming(m, wasNearBottom);
 }
 
 // Mise à jour d'un message modifié (+ citations qui y font référence)
@@ -350,7 +402,9 @@ function showTyping() {
   hideTyping();
   typingEl = document.createElement("div");
   typingEl.className = "message ai typing";
-  typingEl.textContent = "@ai réfléchit…";
+  const label = document.createElement("span");
+  label.textContent = "@ai réfléchit";
+  typingEl.append(label, makeDots());
   messagesEl.appendChild(typingEl);
   scrollToBottom();
 }
@@ -363,6 +417,136 @@ function hideTyping() {
 function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
+
+function isNearBottom() {
+  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+}
+
+// ====== "ÉCRIT…" (animation à trois points) ======
+function makeDots() {
+  const dots = document.createElement("span");
+  dots.className = "dots";
+  for (let i = 0; i < 3; i++) dots.appendChild(document.createElement("i"));
+  return dots;
+}
+
+function setTyper(key, name, ai) {
+  const old = typers.get(key);
+  if (old) clearTimeout(old.timer);
+  // Sans nouvelle nouvelle de lui, il disparaît tout seul (4 s ; 45 s pour l'IA)
+  const timer = setTimeout(() => clearTyper(key), ai ? 45000 : 4000);
+  typers.set(key, { name, ai, timer });
+  renderTyping();
+}
+
+function clearTyper(key) {
+  const t = typers.get(key);
+  if (!t) return;
+  clearTimeout(t.timer);
+  typers.delete(key);
+  renderTyping();
+}
+
+function clearAllTypers() {
+  typers.forEach((t) => clearTimeout(t.timer));
+  typers.clear();
+  renderTyping();
+}
+
+function renderTyping() {
+  const humans = [...typers.values()].filter((t) => !t.ai).map((t) => t.name);
+  const ai = [...typers.values()].some((t) => t.ai);
+  const parts = [];
+  if (humans.length === 1) parts.push(humans[0] + " écrit");
+  else if (humans.length === 2) parts.push(humans[0] + " et " + humans[1] + " écrivent");
+  else if (humans.length > 2) parts.push(humans.length + " personnes écrivent");
+  if (ai) parts.push("@ai réfléchit");
+  typingText.textContent = parts.join(" · ");
+  typingInfo.classList.toggle("idle", parts.length === 0);
+}
+
+// ====== NOUVEAUX MESSAGES : pastille, titre de l'onglet, toast ======
+const inCodeTab = () => document.body.classList.contains("code-mode");
+const away = () => document.hidden || !document.hasFocus();
+
+function noteIncoming(m, wasNearBottom) {
+  if (inCodeTab()) {
+    unread++;
+    showToast(m);
+  } else if (away() || !wasNearBottom) {
+    unread++;
+  }
+  updateUnreadUI();
+}
+
+// Les messages sont "vus" quand le chat est affiché, la fenêtre active, et qu'on est en bas
+function markSeen() {
+  if (unread && !inCodeTab() && !away() && isNearBottom()) {
+    unread = 0;
+    updateUnreadUI();
+  }
+}
+
+function updateUnreadUI() {
+  const count = unread > 99 ? "99+" : String(unread);
+  document.title = (unread ? "(" + count + ") " : "") + "Echo dev";
+  unreadBadge.textContent = count;
+  unreadBadge.classList.toggle("hidden", !(unread && inCodeTab()));
+  newPill.textContent = "↓ " + unread + (unread > 1 ? " nouveaux messages" : " nouveau message");
+  newPill.classList.toggle("hidden", !(unread && !inCodeTab() && !isNearBottom()));
+}
+
+function showToast(m) {
+  toastEl.textContent = authorName(m) + " : " + truncate(m.content.replace(/\s+/g, " "), 80);
+  toastEl.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, 4500);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  toastEl.classList.add("hidden");
+}
+
+// Toucher le toast = revenir sur le chat
+toastEl.addEventListener("click", () => {
+  hideToast();
+  if (inCodeTab()) codeToggleBtn.click();
+});
+
+newPill.addEventListener("click", () => {
+  scrollToBottom();
+  unread = 0;
+  updateUnreadUI();
+});
+
+messagesEl.addEventListener(
+  "scroll",
+  () => {
+    markSeen();
+    updateUnreadUI();
+  },
+  { passive: true }
+);
+document.addEventListener("visibilitychange", () => {
+  markSeen();
+  updateUnreadUI();
+});
+window.addEventListener("focus", () => {
+  markSeen();
+  updateUnreadUI();
+});
+
+// Changement d'onglet Chat <-> Code (la classe "code-mode" est posée par workspace.js)
+new MutationObserver(() => {
+  if (!inCodeTab()) {
+    // La zone de messages perd son défilement quand elle est masquée : retour en bas
+    scrollToBottom();
+    markSeen();
+  }
+  hideToast();
+  updateUnreadUI();
+}).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 // ====== GESTES : glisser = répondre, appui long = menu ======
 function attachGestures(div, m) {
@@ -505,7 +689,11 @@ async function deleteMessage(m) {
 
   if (error) return showSystem("Suppression impossible : " + error.message);
   // La RLS refuse en silence : aucune ligne supprimée = pas le droit
-  if (!data?.length) return showSystem("Suppression refusée.");
+  if (!data?.length) {
+    return showSystem(
+      "Suppression refusée. Si c'est bien ton message, la policy de suppression manque dans Supabase (voir schema.sql)."
+    );
+  }
   removeMessage(m.id);
 }
 
@@ -615,6 +803,8 @@ async function sendMessage() {
   if (editing) return saveEdit(content);
 
   input.value = "";
+  lastTypingSent = 0;
+  sendTypingEvent(false, me.id); // je n'écris plus
 
   const { data, error } = await db
     .from("messages")
@@ -656,6 +846,7 @@ async function saveEdit(content) {
 
 async function askAI(question) {
   showTyping();
+  sendTypingEvent(true, "ai", "@ai", true); // les autres voient aussi "@ai réfléchit"
   try {
     const { error } = await db.functions.invoke("ask-ai", {
       body: { channel_id: channelId, question },
@@ -671,10 +862,25 @@ async function askAI(question) {
     showSystem("@ai n'a pas pu répondre : " + msg);
   } finally {
     hideTyping();
+    sendTypingEvent(false, "ai");
   }
 }
 
 sendBtn.addEventListener("click", sendMessage);
+
+// Diffusion de "j'écris…" (au plus toutes les 2,5 s tant que je tape)
+input.addEventListener("input", () => {
+  if (!me || editing) return;
+  if (!input.value.trim()) {
+    lastTypingSent = 0;
+    return sendTypingEvent(false, me.id);
+  }
+  const now = Date.now();
+  if (now - lastTypingSent > 2500) {
+    lastTypingSent = now;
+    sendTypingEvent(true, me.id, profiles[me.id] ?? "Quelqu'un");
+  }
+});
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();

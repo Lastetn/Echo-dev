@@ -26,6 +26,7 @@
   <header>
     <button id="codeToggle" type="button">Code</button>
     <h1>Echo dev</h1>
+    <span id="unreadBadge" class="hidden"></span>
     <button id="logoutBtn" type="button">Quitter</button>
   </header>
 
@@ -81,6 +82,15 @@
 
   <main id="messages"></main>
 
+  <!-- Pastille "↓ n nouveaux messages" (quand on a remonté dans l'historique) -->
+  <button id="newPill" type="button" class="hidden"></button>
+
+  <!-- "X écrit ●●●" : éphémère, affiché quand quelqu'un tape -->
+  <div id="typingInfo" class="idle">
+    <span id="typingText"></span>
+    <span class="dots"><i></i><i></i><i></i></span>
+  </div>
+
   <!-- Barre "Répondre à…" (affichée quand on touche un message) -->
   <div id="replyBar" class="hidden">
     <div id="replyText"></div>
@@ -96,6 +106,9 @@
     >
     <button id="sendBtn" type="button">Envoyer</button>
   </footer>
+
+  <!-- Notification d'un nouveau message (quand on est sur l'onglet Code) -->
+  <div id="toast" class="hidden"></div>
 
   <!-- Menu du message (appui long / clic droit) -->
   <div id="msgMenu" class="hidden">
