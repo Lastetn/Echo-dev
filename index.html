@@ -32,9 +32,8 @@
   <!-- Espace de travail (onglet Code) -->
   <section id="workspace">
     <div id="wsBar">
-      <select id="wsFile"></select>
-      <button id="wsNew" type="button" title="Nouveau fichier">+</button>
-      <button id="wsReload" type="button" title="Recharger depuis GitHub">↻</button>
+      <button id="wsFilesBtn" type="button" title="Explorateur de fichiers" aria-label="Explorateur de fichiers">☰</button>
+      <div id="wsCurrent">Aucun fichier ouvert</div>
       <button id="wsSave" type="button">Enregistrer</button>
     </div>
     <div id="wsInfo">
@@ -42,20 +41,41 @@
       <button id="wsLive" type="button" title="Édition à plusieurs en direct">Live</button>
     </div>
     <div id="wsPeers" class="hidden"></div>
-    <div id="wsEditor"></div>
 
-    <div id="wsProposal" class="hidden">
-      <div id="wsExplain"></div>
-      <div id="wsDiff"></div>
-      <div id="wsProposalButtons">
-        <button id="wsApply" type="button">Appliquer</button>
-        <button id="wsReject" type="button" class="secondary">Refuser</button>
+    <div id="wsBody">
+      <div id="wsBackdrop"></div>
+
+      <!-- Explorateur de fichiers -->
+      <aside id="wsExplorer">
+        <div id="wsExpHead">
+          <span id="wsExpTitle">Fichiers</span>
+          <div id="wsExpActions">
+            <button id="wsNewFile" type="button" title="Nouveau fichier" aria-label="Nouveau fichier">＋</button>
+            <button id="wsNewFolder" type="button" title="Nouveau dossier" aria-label="Nouveau dossier">📁</button>
+            <button id="wsReload" type="button" title="Recharger depuis GitHub" aria-label="Recharger">↻</button>
+            <button id="wsExpClose" type="button" title="Fermer" aria-label="Fermer">✕</button>
+          </div>
+        </div>
+        <div id="wsTree"></div>
+      </aside>
+
+      <div id="wsMain">
+        <div id="wsEditor"></div>
+
+        <div id="wsProposal" class="hidden">
+          <div id="wsExplain"></div>
+          <div id="wsDiff"></div>
+          <div id="wsProposalButtons">
+            <button id="wsApply" type="button">Appliquer</button>
+            <button id="wsReject" type="button" class="secondary">Refuser</button>
+          </div>
+        </div>
+
+        <div id="wsAsk">
+          <input id="wsPrompt" type="text" placeholder="Demande à Gemini de modifier ce fichier…" autocomplete="off">
+          <button id="wsAskBtn" type="button">Demander</button>
+        </div>
       </div>
-    </div>
-
-    <div id="wsAsk">
-      <input id="wsPrompt" type="text" placeholder="Demande à Gemini de modifier ce fichier…" autocomplete="off">
-      <button id="wsAskBtn" type="button">Demander</button>
     </div>
   </section>
 
@@ -91,6 +111,24 @@
     <div id="infoCard">
       <div id="infoBody"></div>
       <button type="button" id="infoClose">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Menu d'un fichier / dossier de l'explorateur -->
+  <div id="wsItemMenu" class="hidden">
+    <button type="button" data-action="newfile" class="folder-only">Nouveau fichier ici</button>
+    <button type="button" data-action="newfolder" class="folder-only">Nouveau dossier ici</button>
+    <button type="button" data-action="rename">Renommer</button>
+    <button type="button" data-action="move">Déplacer vers…</button>
+    <button type="button" data-action="delete" class="danger">Supprimer</button>
+  </div>
+
+  <!-- Choix du dossier de destination -->
+  <div id="wsPicker" class="hidden">
+    <div id="wsPickerCard">
+      <div id="wsPickerTitle"></div>
+      <div id="wsPickerList"></div>
+      <button type="button" id="wsPickerCancel" class="secondary">Annuler</button>
     </div>
   </div>
 
