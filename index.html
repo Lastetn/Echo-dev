@@ -7,7 +7,7 @@
   <script>
     // Version des fichiers : à incrémenter à chaque mise à jour pour vider le cache de la PWA
     (function () {
-      var V = "3";
+      var V = "4";
       try {
         if (localStorage.getItem("echo-v") === V) return;
         localStorage.setItem("echo-v", V);
@@ -28,7 +28,7 @@
   </script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/theme/material-darker.css">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#000000">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
@@ -183,6 +183,7 @@
       <button id="wsPreviewClose" type="button" class="secondary" title="Fermer">✕</button>
     </div>
     <iframe id="wsPreviewFrame" title="Aperçu" sandbox="allow-scripts allow-modals allow-forms allow-popups"></iframe>
+    <div id="wsPreviewMd" class="md hidden"></div>
     <div id="wsPreviewConsole"></div>
   </div>
 
@@ -226,10 +227,10 @@
     window.dispatchEvent(new Event("yjs-ready"));
   </script>
 
-  <script src="script.js?v=3"></script>
-  <script src="collab.js?v=3"></script>
-  <script src="workspace.js?v=3"></script>
-  <script src="push.js?v=3"></script>
+  <script src="script.js?v=4"></script>
+  <script src="collab.js?v=4"></script>
+  <script src="workspace.js?v=4"></script>
+  <script src="push.js?v=4"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

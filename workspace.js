@@ -1489,6 +1489,31 @@
   const previewConsole = document.getElementById("wsPreviewConsole");
   const previewReload = document.getElementById("wsPreviewReload");
   const previewClose = document.getElementById("wsPreviewClose");
+  const previewMd = document.getElementById("wsPreviewMd");
+
+  // Affiche soit l'aperçu HTML (iframe), soit le rendu Markdown
+  function setPreviewMode(markdown) {
+    previewFrame.classList.toggle("hidden", markdown);
+    previewMd.classList.toggle("hidden", !markdown);
+    if (markdown) previewFrame.srcdoc = ""; // arrête une éventuelle page HTML
+  }
+
+  function showMarkdownPreview() {
+    const text = cm.getValue(); // version de l'éditeur, même non enregistrée
+    previewMd.innerHTML = "";
+    if (window.marked && window.DOMPurify) {
+      previewMd.innerHTML = DOMPurify.sanitize(marked.parse(text, { breaks: true }), {
+        FORBID_TAGS: ["img", "style"],
+      });
+    } else {
+      previewMd.textContent = text;
+    }
+    previewConsole.replaceChildren();
+    previewTitle.textContent = "Aperçu Markdown : " + current.path;
+    setPreviewMode(true);
+    previewModal.classList.remove("hidden");
+    previewMd.scrollTop = 0;
+  }
 
   // Relaie console.* et les erreurs de la page vers la console de l'aperçu
   const PREVIEW_BRIDGE =
@@ -1534,13 +1559,29 @@
   }
 
   async function buildPreview() {
+    // Fichier Markdown : rendu HTML (même moteur que le chat), avec un style sombre
+    if (current && /\.md$/i.test(current.path)) {
+      if (!window.marked || !window.DOMPurify) throw new Error("Le rendu Markdown n'a pas pu se charger (CDN bloqué ?).");
+      const body = DOMPurify.sanitize(marked.parse(cm.getValue(), { breaks: true }), { FORBID_TAGS: ["img", "style"] });
+      const css = "body{font-family:Inter,Arial,sans-serif;background:#0f0f14;color:#f5f5f7;line-height:1.55;margin:0;padding:18px;max-width:820px}" +
+        "h1,h2,h3,h4{line-height:1.25}a{color:#8b5cf6}code{background:rgba(255,255,255,.1);padding:1px 5px;border-radius:5px;font-size:.9em}" +
+        "pre{background:rgba(255,255,255,.07);padding:10px 12px;border-radius:8px;overflow-x:auto}pre code{background:none;padding:0}" +
+        "blockquote{border-left:3px solid #6d5dfc;margin:0 0 .8em;padding-left:10px;opacity:.9}table{border-collapse:collapse;display:block;overflow-x:auto}" +
+        "th,td{border:1px solid #2c2c3a;padding:4px 8px}img{max-width:100%}hr{border:none;border-top:1px solid #2c2c3a}";
+      return {
+        htmlPath: current.path,
+        missing: [],
+        html: '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + "</style></head><body>" + body + "</body></html>",
+      };
+    }
+
     let htmlPath = current && /\.html?$/i.test(current.path) ? current.path : null;
     if (!htmlPath) {
       const dir = current ? dirName(current.path) : "";
       const near = (dir ? dir + "/" : "") + "index.html";
       htmlPath = paths.includes(near) ? near : paths.includes("index.html") ? "index.html" : null;
     }
-    if (!htmlPath) throw new Error("Ouvre un fichier .html (ou crée un index.html) pour lancer l'aperçu.");
+    if (!htmlPath) throw new Error("Ouvre un fichier .html ou .md (ou crée un index.html) pour lancer l'aperçu.");
 
     const dir = dirName(htmlPath);
     const doc = new DOMParser().parseFromString(await readForPreview(htmlPath), "text/html");
@@ -1577,6 +1618,8 @@
 
   async function runPreview() {
     if (!cm) return;
+    if (current && /\.md$/i.test(current.path)) return showMarkdownPreview();
+    setPreviewMode(false);
     previewBtn.disabled = true;
     setStatus("Préparation de l'aperçu…");
     try {
@@ -1597,6 +1640,7 @@
   function closePreview() {
     previewModal.classList.add("hidden");
     previewFrame.srcdoc = ""; // arrête la page (sons, timers…)
+    previewMd.innerHTML = "";
     previewConsole.replaceChildren();
   }
 

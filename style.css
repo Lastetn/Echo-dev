@@ -1493,3 +1493,36 @@ button.danger-action {
 #wsPreviewConsole .log-error { color: #f87171; }
 #wsPreviewConsole .log-warn { color: #fbbf24; }
 #wsPreviewConsole .log-info { color: var(--text-secondary); }
+
+/* Aperçu Markdown */
+
+#wsPreviewMd {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch; /* défilement fluide sur iPhone */
+  overscroll-behavior: contain;
+  touch-action: pan-y; /* le glissement vertical défile le texte */
+
+  padding: 16px 18px 32px;
+
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+#wsPreviewMd.md h1,
+#wsPreviewMd.md h2,
+#wsPreviewMd.md h3,
+#wsPreviewMd.md h4 {
+  margin: 1em 0 0.5em;
+  font-size: 1.15rem;
+}
+
+#wsPreviewMd.md table th,
+#wsPreviewMd.md table td {
+  border-color: var(--border);
+}
