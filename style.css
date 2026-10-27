@@ -241,6 +241,42 @@ input:focus {
   border-color: var(--accent);
 }
 
+/* Champ de message (textarea : sauts de ligne possibles) */
+
+#messageInput {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+
+  padding: 12px 16px;
+
+  font-family: Inter, Arial, sans-serif;
+  font-size: 16px; /* 16px : évite le zoom automatique sur iPhone */
+  line-height: 1.4;
+
+  background: var(--surface-light);
+  color: var(--text);
+
+  border: 1px solid var(--border);
+  border-radius: 14px;
+
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+}
+
+#messageInput::placeholder {
+  color: var(--text-secondary);
+}
+
+#messageInput:focus {
+  border-color: var(--accent);
+}
+
+footer {
+  align-items: flex-end;
+}
+
 /* Bouton */
 
 button {

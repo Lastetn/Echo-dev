@@ -46,6 +46,7 @@ const newPill = document.getElementById("newPill");
 const toastEl = document.getElementById("toast");
 const unreadBadge = document.getElementById("unreadBadge");
 const codeToggleBtn = document.getElementById("codeToggle");
+const mentionMenu = document.getElementById("mentionMenu");
 
 // ====== ÉTAT ======
 let me = null;
@@ -53,6 +54,7 @@ let channelId = null;
 let subscription = null;
 let started = false;
 let profiles = {}; // id -> username
+let devs = []; // pseudos des comptes dev
 let typingEl = null;
 let roomReady = false; // canal temps réel connecté (nécessaire pour envoyer "écrit…")
 const typers = new Map(); // clé (id d'utilisateur ou "ai") -> { name, ai, timer }
@@ -62,6 +64,8 @@ let toastTimer = null;
 let replyTo = null; // message auquel on répond
 let editing = null; // message en cours de modification
 let menuMsg = null; // message ciblé par le menu
+let mentionItems = []; // suggestions de complétion @
+let mentionIdx = 0;
 const byId = new Map(); // id -> message
 const els = new Map(); // id -> élément DOM
 
@@ -192,12 +196,14 @@ function stop() {
   byId.clear();
   els.clear();
   profiles = {};
+  devs = [];
   roomReady = false;
   clearAllTypers();
   unread = 0;
   updateUnreadUI();
   hideToast();
   closeMenu();
+  hideMentions();
   replyTo = null;
   editing = null;
   input.value = "";
@@ -207,8 +213,6 @@ function stop() {
 }
 
 // ====== DONNÉES ======
-let devs = []; // pseudos des comptes dev
-
 async function loadProfiles() {
   const { data } = await db.from("profiles").select("id, username, is_dev");
   (data ?? []).forEach((p) => (profiles[p.id] = p.username));
@@ -290,18 +294,32 @@ function fmtDate(iso) {
   });
 }
 
-// Corps du message : Markdown pour l'IA (nettoyé), texte brut pour les humains
+// Corps du message : Markdown pour tous les messages (nettoyé par DOMPurify)
+// breaks: true -> un saut de ligne saisi devient un saut de ligne affiché
 function renderBody(m) {
   const el = document.createElement("div");
-  if (m.role === "ai" && window.marked && window.DOMPurify) {
+  if (window.marked && window.DOMPurify) {
     el.className = "md";
     const html = marked.parse(m.content, { breaks: true });
     el.innerHTML = DOMPurify.sanitize(html, { FORBID_TAGS: ["img", "style"] });
+    if (m.role !== "ai") highlightMentionsIn(el); // les @pseudos des devs restent surlignés
   } else {
     el.className = "plain";
     el.replaceChildren(highlightMentions(m.content)); // pas d'injection HTML
   }
   return el;
+}
+
+// Surligne les @pseudos dans les nœuds texte, sans toucher au code (code / pre)
+function highlightMentionsIn(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (!node.nodeValue.includes("@")) continue;
+    if (node.parentElement?.closest("code, pre")) continue;
+    node.replaceWith(highlightMentions(node.nodeValue));
+  }
 }
 
 function highlightMentions(text) {
@@ -780,7 +798,14 @@ infoModal.addEventListener("click", (e) => {
 });
 
 // ====== RÉPONDRE / MODIFIER (barre au-dessus du champ) ======
+// Le champ grandit avec le texte (jusqu'à 160 px, puis défilement)
+function autosizeInput() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+}
+
 function updateBar() {
+  autosizeInput();
   if (editing) {
     replyText.textContent = "Modification du message";
     replyBar.classList.remove("hidden");
@@ -832,6 +857,7 @@ async function sendMessage() {
   if (editing) return saveEdit(content);
 
   input.value = "";
+  autosizeInput();
   lastTypingSent = 0;
   sendTypingEvent(false, me.id); // je n'écris plus
 
@@ -848,6 +874,7 @@ async function sendMessage() {
 
   if (error) {
     input.value = content;
+    autosizeInput();
     return showSystem("Envoi impossible : " + error.message);
   }
   clearReply();
@@ -895,10 +922,7 @@ async function askAI(question) {
   }
 }
 
-const mentionMenu = document.getElementById("mentionMenu");
-let mentionItems = [];
-let mentionIdx = 0;
-
+// ====== COMPLÉTION @ ======
 function hideMentions() {
   mentionMenu.classList.add("hidden");
   mentionItems = [];
@@ -928,9 +952,11 @@ function renderMentions() {
 
 function updateMentions() {
   const r = currentMention();
-  const me_name = profiles[me?.id];
+  const myName = profiles[me?.id];
   mentionItems = r
-    ? devs.filter((d) => d.toLowerCase().startsWith(r.q) && d !== me_name && d.toLowerCase() !== "ai").slice(0, 6)
+    ? devs
+        .filter((d) => d.toLowerCase().startsWith(r.q) && d !== myName && d.toLowerCase() !== "ai")
+        .slice(0, 6)
     : [];
   if (!mentionItems.length) return hideMentions();
   mentionIdx = 0;
@@ -950,10 +976,12 @@ function applyMention(name) {
 }
 
 input.addEventListener("input", updateMentions);
+input.addEventListener("input", autosizeInput);
 input.addEventListener("blur", () => setTimeout(hideMentions, 150));
 
-// À placer AU DÉBUT du listener keydown existant de #messageInput
+// ====== CLAVIER : complétion + envoi (un seul listener, pas de doublon) ======
 input.addEventListener("keydown", (e) => {
+  // Menu de complétion ouvert
   if (!mentionMenu.classList.contains("hidden")) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -967,7 +995,14 @@ input.addEventListener("keydown", (e) => {
     }
     if (e.key === "Escape") return hideMentions();
   }
-  // ...le code existant (Enter pour envoyer) continue ici
+
+  // Sinon : Entrée envoie, Maj+Entrée saute une ligne.
+  // Sur écran tactile (pas de touche Maj), Entrée saute une ligne : on envoie avec le bouton.
+  const touchDevice = window.matchMedia("(pointer: coarse)").matches;
+  if (e.key === "Enter" && !e.shiftKey && !touchDevice) {
+    e.preventDefault();
+    sendMessage();
+  }
 });
 
 sendBtn.addEventListener("click", sendMessage);
@@ -983,11 +1018,5 @@ input.addEventListener("input", () => {
   if (now - lastTypingSent > 2500) {
     lastTypingSent = now;
     sendTypingEvent(true, me.id, profiles[me.id] ?? "Quelqu'un");
-  }
-});
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
   }
 });
