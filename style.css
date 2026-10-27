@@ -1419,3 +1419,77 @@ button.danger-action {
   background: rgba(109, 93, 252, 0.35);
   font-weight: 600;
 }
+
+/* Aperçu (exécution de la page HTML du dépôt) */
+
+#wsPreview {
+  padding: 10px 14px;
+  background: var(--surface-light);
+  border: 1px solid var(--border);
+}
+
+#wsPreviewModal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+
+  display: flex;
+  flex-direction: column;
+
+  background: var(--bg);
+}
+
+#wsPreviewBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 8px 10px;
+
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+#wsPreviewTitle {
+  flex: 1;
+  min-width: 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-size: 0.9rem;
+}
+
+#wsPreviewBar button {
+  padding: 8px 12px;
+}
+
+#wsPreviewFrame {
+  flex: 1;
+  min-height: 0;
+
+  border: 0;
+  background: #fff;
+}
+
+#wsPreviewConsole {
+  max-height: 30%;
+  overflow: auto;
+
+  padding: 6px 10px;
+
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#wsPreviewConsole:empty { display: none; }
+
+#wsPreviewConsole .log-error { color: #f87171; }
+#wsPreviewConsole .log-warn { color: #fbbf24; }
+#wsPreviewConsole .log-info { color: var(--text-secondary); }

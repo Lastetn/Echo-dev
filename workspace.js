@@ -1480,6 +1480,133 @@
 
   liveBtn.addEventListener("click", () => setLive(!liveOn));
 
+  // ---------- Aperçu : exécute la page HTML du dépôt dans un cadre isolé ----------
+  // Le cadre est "sandbox" sans allow-same-origin : la page n'a accès ni à la session Supabase ni au stockage d'Echo dev.
+  const previewBtn = document.getElementById("wsPreview");
+  const previewModal = document.getElementById("wsPreviewModal");
+  const previewFrame = document.getElementById("wsPreviewFrame");
+  const previewTitle = document.getElementById("wsPreviewTitle");
+  const previewConsole = document.getElementById("wsPreviewConsole");
+  const previewReload = document.getElementById("wsPreviewReload");
+  const previewClose = document.getElementById("wsPreviewClose");
+
+  // Relaie console.* et les erreurs de la page vers la console de l'aperçu
+  const PREVIEW_BRIDGE =
+    "<script>(function(){var send=function(l,a){try{parent.postMessage({echoPreview:true,level:l," +
+    "msg:Array.prototype.map.call(a,function(x){try{return typeof x==='string'?x:JSON.stringify(x)}catch(e){return String(x)}}).join(' ')},'*')}catch(e){}};" +
+    "['log','info','warn','error'].forEach(function(k){var o=console[k];console[k]=function(){send(k,arguments);o.apply(console,arguments)}});" +
+    "window.addEventListener('error',function(e){send('error',[e.message+(e.lineno?' (ligne '+e.lineno+')':'')])});" +
+    "window.addEventListener('unhandledrejection',function(e){send('error',['Promesse rejetée : '+(e.reason&&e.reason.message||e.reason)])})})();<\/script>";
+
+  // Chemin relatif (par rapport au dossier de la page) -> chemin dans le dépôt, ou null pour une URL externe
+  function resolveRepoPath(fromDir, ref) {
+    ref = (ref || "").split("#")[0].split("?")[0].trim();
+    if (!ref || /^([a-z][a-z0-9+.-]*:)?\/\//i.test(ref) || /^(data|blob|mailto|javascript):/i.test(ref)) return null;
+    const parts = ref.startsWith("/") ? [] : fromDir ? fromDir.split("/") : [];
+    for (const seg of ref.split("/")) {
+      if (!seg || seg === ".") continue;
+      if (seg === "..") parts.pop();
+      else parts.push(seg);
+    }
+    return parts.join("/");
+  }
+
+  function logPreview(level, text) {
+    const line = document.createElement("div");
+    line.className = "log-" + level;
+    line.textContent = (level === "error" ? "✖ " : level === "warn" ? "⚠ " : "") + text;
+    previewConsole.appendChild(line);
+    previewConsole.scrollTop = previewConsole.scrollHeight;
+  }
+
+  window.addEventListener("message", (e) => {
+    if (e.source !== previewFrame.contentWindow) return;
+    const m = e.data;
+    if (!m || m.echoPreview !== true) return;
+    logPreview(["error", "warn", "info"].includes(m.level) ? m.level : "log", String(m.msg ?? "").slice(0, 2000));
+  });
+
+  async function readForPreview(path) {
+    if (current?.path === path) return cm.getValue(); // version de l'éditeur, même non enregistrée
+    if (!paths.includes(path)) return null;
+    const d = await callFn("github", { action: "read", path });
+    return d.content;
+  }
+
+  async function buildPreview() {
+    let htmlPath = current && /\.html?$/i.test(current.path) ? current.path : null;
+    if (!htmlPath) {
+      const dir = current ? dirName(current.path) : "";
+      const near = (dir ? dir + "/" : "") + "index.html";
+      htmlPath = paths.includes(near) ? near : paths.includes("index.html") ? "index.html" : null;
+    }
+    if (!htmlPath) throw new Error("Ouvre un fichier .html (ou crée un index.html) pour lancer l'aperçu.");
+
+    const dir = dirName(htmlPath);
+    const doc = new DOMParser().parseFromString(await readForPreview(htmlPath), "text/html");
+    const cache = new Map();
+    const load = (ref) => {
+      const p = resolveRepoPath(dir, ref);
+      if (p === null) return Promise.resolve({ external: true });
+      if (!cache.has(p)) {
+        cache.set(p, readForPreview(p).then((text) => ({ path: p, text })).catch(() => ({ path: p, text: null })));
+      }
+      return cache.get(p);
+    };
+    const missing = [];
+
+    for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+      const r = await load(link.getAttribute("href"));
+      if (r.external) continue;
+      if (r.text == null) { missing.push(r.path); continue; }
+      const style = doc.createElement("style");
+      style.textContent = r.text;
+      link.replaceWith(style);
+    }
+    for (const script of [...doc.querySelectorAll("script[src]")]) {
+      const r = await load(script.getAttribute("src"));
+      if (r.external) continue;
+      if (r.text == null) { missing.push(r.path); continue; }
+      script.removeAttribute("src");
+      script.textContent = r.text.replace(/<\/script/gi, "<\\/script");
+    }
+
+    doc.head.insertAdjacentHTML("afterbegin", PREVIEW_BRIDGE);
+    return { htmlPath, missing, html: "<!DOCTYPE html>\n" + doc.documentElement.outerHTML };
+  }
+
+  async function runPreview() {
+    if (!cm) return;
+    previewBtn.disabled = true;
+    setStatus("Préparation de l'aperçu…");
+    try {
+      const { htmlPath, missing, html } = await buildPreview();
+      previewConsole.replaceChildren();
+      previewTitle.textContent = "Aperçu : " + htmlPath;
+      previewFrame.srcdoc = html;
+      previewModal.classList.remove("hidden");
+      missing.forEach((p) => logPreview("warn", "Fichier introuvable dans le dépôt : " + p));
+      refreshStatus();
+    } catch (e) {
+      setStatus("Aperçu impossible : " + e.message, "error");
+    } finally {
+      previewBtn.disabled = false;
+    }
+  }
+
+  function closePreview() {
+    previewModal.classList.add("hidden");
+    previewFrame.srcdoc = ""; // arrête la page (sons, timers…)
+    previewConsole.replaceChildren();
+  }
+
+  previewBtn.addEventListener("click", runPreview);
+  previewReload.addEventListener("click", runPreview);
+  previewClose.addEventListener("click", closePreview);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !previewModal.classList.contains("hidden")) closePreview();
+  });
+
   // ---------- onglet Code / Chat ----------
   toggleBtn.addEventListener("click", () => {
     const on = document.body.classList.toggle("code-mode");
@@ -1495,6 +1622,7 @@
     if (session) return;
     document.body.classList.remove("code-mode");
     toggleBtn.textContent = "Code";
+    closePreview();
     window.EchoCollab?.stop();
     liveOn = false;
     liveBtn.classList.remove("on");

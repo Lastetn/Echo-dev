@@ -4,12 +4,47 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Echo dev</title>
+  <script>
+    // Version des fichiers : à incrémenter à chaque mise à jour pour vider le cache de la PWA
+    (function () {
+      var V = "3";
+      try {
+        if (localStorage.getItem("echo-v") === V) return;
+        localStorage.setItem("echo-v", V);
+        var jobs = [];
+        if (window.caches) {
+          jobs.push(caches.keys().then(function (keys) {
+            return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+          }));
+        }
+        if (navigator.serviceWorker) {
+          jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          }).catch(function () {}));
+        }
+        Promise.all(jobs).then(function () { location.reload(); }, function () {});
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/theme/material-darker.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=3">
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#000000">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <!-- Champ de message : style garanti même si style.css est en cache -->
+  <style>
+    footer { align-items: flex-end; }
+    #messageInput {
+      flex: 1; min-width: 0; max-height: 160px;
+      padding: 12px 16px; font-family: Inter, Arial, sans-serif;
+      font-size: 16px; line-height: 1.4;
+      background: #22222e; color: #f5f5f7;
+      border: 1px solid #2c2c3a; border-radius: 14px;
+      outline: none; resize: none; overflow-y: auto;
+    }
+    #messageInput:focus { border-color: #6d5dfc; }
+  </style>
 </head>
 <body>
 
@@ -39,6 +74,7 @@
     <div id="wsBar">
       <button id="wsFilesBtn" type="button" title="Explorateur de fichiers" aria-label="Explorateur de fichiers">☰</button>
       <div id="wsCurrent">Aucun fichier ouvert</div>
+      <button id="wsPreview" type="button" title="Exécuter la page HTML dans un aperçu">▶ Aperçu</button>
       <button id="wsSave" type="button">Enregistrer</button>
     </div>
     <div id="wsInfo">
@@ -139,6 +175,17 @@
     </div>
   </div>
 
+  <!-- Aperçu : exécute la page HTML du dépôt dans un cadre isolé -->
+  <div id="wsPreviewModal" class="hidden">
+    <div id="wsPreviewBar">
+      <span id="wsPreviewTitle"></span>
+      <button id="wsPreviewReload" type="button" class="secondary" title="Relancer">↻</button>
+      <button id="wsPreviewClose" type="button" class="secondary" title="Fermer">✕</button>
+    </div>
+    <iframe id="wsPreviewFrame" title="Aperçu" sandbox="allow-scripts allow-modals allow-forms allow-popups"></iframe>
+    <div id="wsPreviewConsole"></div>
+  </div>
+
   <!-- Menu d'un fichier / dossier de l'explorateur -->
   <div id="wsItemMenu" class="hidden">
     <button type="button" data-action="newfile" class="folder-only">Nouveau fichier ici</button>
@@ -179,10 +226,10 @@
     window.dispatchEvent(new Event("yjs-ready"));
   </script>
 
-  <script src="script.js"></script>
-  <script src="collab.js"></script>
-  <script src="workspace.js"></script>
-  <script src="push.js"></script>
+  <script src="script.js?v=3"></script>
+  <script src="collab.js?v=3"></script>
+  <script src="workspace.js?v=3"></script>
+  <script src="push.js?v=3"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
