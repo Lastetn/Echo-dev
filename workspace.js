@@ -34,7 +34,32 @@
   const pickerList = document.getElementById("wsPickerList");
   const pickerCancel = document.getElementById("wsPickerCancel");
 
+  const BUILD = "b10";
+  const buildEl = document.getElementById("wsBuild");
+  const setBuild = (engine, err) => {
+    if (!buildEl) return;
+    buildEl.textContent = BUILD + (engine ? " · " + engine : "");
+    buildEl.title = err || "";
+  };
+  setBuild("");
   let cm = null; // instance CodeMirror
+  let engineName = "";
+
+  // Retour à la ligne automatique : désactivé par défaut, choix mémorisé
+  const wrapBtn = document.getElementById("wsWrap");
+  let wrapOn = false;
+  try { wrapOn = localStorage.getItem("echo-wrap") === "1"; } catch (_) {}
+  const applyWrap = () => {
+    if (wrapBtn) wrapBtn.classList.toggle("on", wrapOn);
+    if (cm && cm.setWrap) cm.setWrap(wrapOn);
+  };
+  if (wrapBtn) {
+    wrapBtn.addEventListener("click", () => {
+      wrapOn = !wrapOn;
+      try { localStorage.setItem("echo-wrap", wrapOn ? "1" : "0"); } catch (_) {}
+      applyWrap();
+    });
+  }
   let paths = []; // chemins des fichiers du dépôt (y compris les .gitkeep)
   let current = null; // { path, sha } (sha = null pour un nouveau fichier)
   let dirty = false;
@@ -65,7 +90,9 @@
 
   function setStatus(text, kind) {
     statusEl.textContent = text;
+    statusEl.title = text;
     statusEl.className = kind ?? "";
+    if (kind === "error") console.warn("[workspace]", text);
   }
 
   function updateCurrentLabel() {
@@ -106,56 +133,181 @@
     }
   }
 
-  function modeFor(path) {
-    const ext = path.includes(".") ? path.split(".").pop().toLowerCase() : "";
-    const map = {
-      js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
-      ts: { name: "javascript", typescript: true },
-      tsx: { name: "javascript", typescript: true },
-      json: { name: "javascript", json: true },
-      html: "htmlmixed", htm: "htmlmixed",
-      xml: "xml", svg: "xml",
-      css: "css", scss: "css",
-      py: "python", sql: "sql", sh: "shell",
+  // ---------- éditeur de secours (si CodeMirror 6 ne peut pas se charger) ----------
+  // Simple zone de texte : pas de coloration, mais même interface, donc ouverture, enregistrement et Live fonctionnent.
+  function createFallbackEditor(parent, opts = {}) {
+    const ta = document.createElement("textarea");
+    ta.className = "ws-fallback";
+    ta.setAttribute("autocapitalize", "off");
+    ta.setAttribute("autocorrect", "off");
+    ta.setAttribute("autocomplete", "off");
+    ta.setAttribute("spellcheck", "false");
+    ta.setAttribute("wrap", "off");
+    ta.setAttribute("aria-label", "Éditeur de code");
+    parent.appendChild(ta);
+
+    const listeners = { change: [], cursorActivity: [], docChange: [] };
+    let prev = "";
+    let silent = false;
+
+    const fire = (type) => {
+      for (const fn of [...listeners[type]]) fn(api);
     };
-    return map[ext] ?? null;
+
+    ta.addEventListener("input", () => {
+      const cur = ta.value;
+      if (silent) {
+        prev = cur;
+        return;
+      }
+      // Détecte la zone modifiée (début et fin communs), comme le fait le Live
+      const max = Math.min(prev.length, cur.length);
+      let p = 0;
+      while (p < max && prev[p] === cur[p]) p++;
+      let e = 0;
+      while (e < max - p && prev[prev.length - 1 - e] === cur[cur.length - 1 - e]) e++;
+      const change = { from: p, to: prev.length - e, insert: cur.slice(p, cur.length - e) };
+      prev = cur;
+      for (const fn of [...listeners.docChange]) fn([change], "user");
+      fire("change");
+      fire("cursorActivity");
+    });
+
+    ta.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        opts.onSave?.();
+      } else if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end");
+        ta.dispatchEvent(new Event("input"));
+      }
+    });
+    for (const ev of ["keyup", "pointerup", "touchend"]) {
+      ta.addEventListener(ev, () => fire("cursorActivity"));
+    }
+
+    const api = {
+      view: null,
+      isFallback: true,
+      getValue: () => ta.value,
+      setValue(text) {
+        silent = true;
+        ta.value = text;
+        prev = text;
+        silent = false;
+        ta.setSelectionRange(0, 0);
+        ta.scrollTop = 0;
+        ta.scrollLeft = 0;
+      },
+      clearHistory() {},
+      setLanguage() {},
+      refresh() {},
+      focus: () => ta.focus(),
+      on(type, fn) { (listeners[type] ??= []).push(fn); },
+      off(type, fn) { listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn); },
+      onDocChange(fn) { listeners.docChange.push(fn); },
+      offDocChange(fn) { listeners.docChange = listeners.docChange.filter((f) => f !== fn); },
+
+      // Changements venus de l'extérieur (collaborateur) : positions de l'ancien texte
+      applyChanges(changes) {
+        const old = ta.value;
+        const map = (pos) => {
+          let d = 0;
+          for (const c of changes) {
+            if (c.to < pos || (c.to === pos && c.from < c.to)) d += c.insert.length - (c.to - c.from);
+            else if (c.from < pos) return c.from + d + c.insert.length;
+            else break;
+          }
+          return pos + d;
+        };
+        let out = "";
+        let at = 0;
+        for (const c of changes) {
+          out += old.slice(at, c.from) + c.insert;
+          at = c.to;
+        }
+        out += old.slice(at);
+        const s = map(ta.selectionStart);
+        const e = map(ta.selectionEnd);
+        const top = ta.scrollTop;
+        silent = true;
+        ta.value = out;
+        prev = out;
+        silent = false;
+        ta.setSelectionRange(s, e);
+        ta.scrollTop = top;
+      },
+      setReadOnly(on) { ta.readOnly = Boolean(on); },
+      setWrap(on) {
+        ta.setAttribute("wrap", on ? "soft" : "off");
+        ta.style.whiteSpace = on ? "pre-wrap" : "pre";
+      },
+      getSelectionIndexes() {
+        const back = ta.selectionDirection === "backward";
+        return {
+          anchor: back ? ta.selectionEnd : ta.selectionStart,
+          head: back ? ta.selectionStart : ta.selectionEnd,
+        };
+      },
+      setRemoteCursors() {}, // pas d'affichage des curseurs des autres dans l'éditeur de secours
+    };
+    return api;
   }
 
   // ---------- éditeur ----------
-  function initEditor() {
-    if (typeof CodeMirror === "undefined") {
-      setStatus("L'éditeur n'a pas pu se charger (CDN bloqué ?).", "error");
-      return false;
+  // CodeMirror 6 se charge en module (voir index.html) : on attend qu'il soit prêt si besoin
+  async function initEditor() {
+    if (cm) return true;
+    if (!window.EchoCM6 && !window.EchoCM6Error) {
+      setStatus("Chargement de l'éditeur…");
+      await new Promise((resolve) => {
+        window.addEventListener("cm6-ready", resolve, { once: true });
+        window.addEventListener("cm6-error", resolve, { once: true });
+        setTimeout(resolve, 8000);
+      });
     }
-    cm = CodeMirror(editorEl, {
-      value: "",
-      lineNumbers: true,
-      theme: "material-darker",
-      tabSize: 2,
-      indentUnit: 2,
-      indentWithTabs: false,
-      autoCloseBrackets: true,
-      matchBrackets: true,
-      extraKeys: {
-        Tab: (c) =>
-          c.somethingSelected() ? c.indentSelection("add") : c.replaceSelection("  ", "end"),
-        "Ctrl-S": () => saveFile(),
-        "Cmd-S": () => saveFile(),
-      },
-    });
-    cm.setSize("100%", "100%");
+    if (cm) return true; // un autre clic l'a créé pendant l'attente
+    if (window.EchoCM6) {
+      try {
+        cm = EchoCM6.create(editorEl, {
+          onSave: () => saveFile(),
+          onLanguage: (i) => setBuild(engineName + (i.mode === "simple" ? " · coul. simple" : ""), i.error),
+        });
+      } catch (err) {
+        // La création a planté (ex : deux copies de @codemirror/state) : on passe à l'éditeur de secours
+        console.error("Création de CodeMirror 6 impossible :", err);
+        window.EchoCM6Error = err;
+        cm = null;
+        editorEl.replaceChildren();
+      }
+    }
+    if (!cm) {
+      // CodeMirror 6 indisponible : éditeur simplifié pour pouvoir quand même travailler
+      const why = window.EchoCM6Error ? String(window.EchoCM6Error.message || window.EchoCM6Error) : "délai dépassé";
+      console.warn("Éditeur de secours utilisé :", why);
+      cm = createFallbackEditor(editorEl, { onSave: () => saveFile() });
+      const note = document.createElement("div");
+      note.className = "ws-fallback-note";
+      note.textContent = "Éditeur simplifié (CodeMirror 6 indisponible : " + why + ")";
+      editorEl.appendChild(note);
+    }
+    engineName = cm.isFallback ? "secours" : "CM6";
+    setBuild(engineName);
+    applyWrap();
     cm.on("change", () => {
       if (loading) return;
       dirty = true;
       refreshStatus();
     });
+    refreshStatus();
     return true;
   }
 
   function fillEditor(path, content) {
     baseText = content;
     loading = true;
-    cm.setOption("mode", modeFor(path));
+    cm.setLanguage(path);
     cm.setValue(content);
     cm.clearHistory();
     loading = false;
@@ -173,7 +325,7 @@
   );
   expCloseBtn.addEventListener("click", () => setExplorer(false));
   backdropEl.addEventListener("click", () => setExplorer(false));
-  window.addEventListener("resize", () => cm && cm.refresh());
+  // Pas de refresh au "resize" : CodeMirror 6 se mesure tout seul, et un refresh à l'ouverture du clavier le refermait
   setExplorer(isDesktop());
 
   // ---------- explorateur : arbre ----------
@@ -346,7 +498,7 @@
       if (!paths.length) setStatus("Dépôt vide : crée un fichier avec ＋.");
       else setStatus(realFiles().length + " fichiers" + (d.truncated ? " (liste tronquée)" : ""));
     } catch (e) {
-      setStatus("Erreur GitHub : " + e.message, "error");
+      setStatus("Erreur GitHub : " + e.message + (e.status ? " (code " + e.status + ")" : ""), "error");
     } finally {
       treeLoading = false;
     }
@@ -533,6 +685,7 @@
   }
 
   async function openFile(path) {
+    if (!cm && !(await initEditor())) return;
     hideProposal();
     window.EchoCollab?.stop();
     setStatus("Ouverture de " + path + "…");
@@ -640,7 +793,7 @@
     hideProposal();
     current = null;
     loading = true;
-    cm.setOption("mode", null);
+    cm.setLanguage("");
     cm.setValue("");
     cm.clearHistory();
     loading = false;
@@ -681,7 +834,7 @@
         return setStatus("Un élément porte déjà ce nom.", "error");
       }
       current.path = to;
-      cm.setOption("mode", modeFor(to));
+      cm.setLanguage(to);
       expandAncestors(to);
       renderTree();
       refreshStatus();
@@ -697,7 +850,7 @@
 
       if (affectsCurrent) {
         current.path = item.kind === "folder" ? to + current.path.slice(item.path.length) : to;
-        cm.setOption("mode", modeFor(current.path));
+        cm.setLanguage(current.path);
       }
       if (item.kind === "folder") {
         const next = new Set();
@@ -1652,13 +1805,16 @@
   });
 
   // ---------- onglet Code / Chat ----------
-  toggleBtn.addEventListener("click", () => {
+  toggleBtn.addEventListener("click", async () => {
     const on = document.body.classList.toggle("code-mode");
     toggleBtn.textContent = on ? "Chat" : "Code";
     if (!on) return;
-    if (!cm && !initEditor()) return;
-    setTimeout(() => cm.refresh(), 0);
-    if (!paths.length && !treeLoading) loadTree();
+    // La liste des fichiers (Supabase / GitHub) se charge sans attendre l'éditeur
+    const tree = !paths.length && !treeLoading ? loadTree() : Promise.resolve();
+    const editorOk = await initEditor();
+    await tree;
+    if (editorOk) setTimeout(() => cm.refresh(), 0);
+    else initEditor(); // réaffiche l'erreur de l'éditeur (loadTree a pu écraser le statut)
   });
 
   // Déconnexion : on vide tout (pas d'appel Supabase dans ce callback)

@@ -108,7 +108,7 @@
       cursorTimer: null,
       renderQueued: false,
       applyingRemote: false,
-      onBefore: null,
+      onChange: null,
       onObserve: null,
       onUpdate: null,
       onCursor: null,
@@ -122,7 +122,7 @@
     session = s;
 
     // Lecture seule pendant la synchronisation (quelques secondes au plus)
-    cm.setOption("readOnly", true);
+    cm.setReadOnly(true);
 
     // --- messages reçus ---
     channel.on("broadcast", { event: "hello" }, ({ payload }) => {
@@ -156,7 +156,7 @@
       if (!s.synced) return;
       s.remote.set(payload.from, {
         name: payload.name,
-        hue: payload.hue,
+        hue: Number(payload.hue) % 360 || 0,
         anchor: payload.anchor,
         head: payload.head,
       });
@@ -216,7 +216,7 @@
     s.synced = true;
     s.opts.fill(s.ytext.toString());
     bind(s);
-    s.cm.setOption("readOnly", false);
+    s.cm.setReadOnly(false);
     sendCursor(s);
     // Rattrapage : une 2e demande récupère d'éventuelles modifications arrivées pendant la synchro
     setTimeout(() => s.send("hello"), 800);
@@ -261,7 +261,7 @@
     s.base = s.opts.sha ?? null;
     s.synced = true;
     bind(s);
-    s.cm.setOption("readOnly", false);
+    s.cm.setReadOnly(false);
     if (changed) {
       sendPayload(s, "update", { u: u8ToB64(s.Y.encodeStateAsUpdate(s.doc)) });
     }
@@ -272,42 +272,46 @@
   function bind(s) {
     const { Y, doc, ytext, cm } = s;
 
-    // Éditeur -> Yjs. "beforeChange" donne la position exacte avant chaque modification.
-    s.onBefore = (_cm, change) => {
-      if (s.applyingRemote || change.origin === "yjs") return;
-      const from = cm.indexFromPos(change.from);
-      const to = cm.indexFromPos(change.to);
+    // Éditeur -> Yjs. Les positions sont celles du document AVANT la modification :
+    // on les applique du dernier changement au premier pour qu'elles restent valables.
+    s.onChange = (changes, origin) => {
+      if (s.applyingRemote || origin === "yjs") return;
       doc.transact(() => {
-        if (to > from) ytext.delete(from, to - from);
-        const text = change.text.join("\n");
-        if (text) ytext.insert(from, text);
+        for (let i = changes.length - 1; i >= 0; i--) {
+          const c = changes[i];
+          if (c.to > c.from) ytext.delete(c.from, c.to - c.from);
+          if (c.insert) ytext.insert(c.from, c.insert);
+        }
       }, "local");
     };
-    cm.on("beforeChange", s.onBefore);
+    cm.onDocChange(s.onChange);
 
-    // Yjs -> éditeur (modifications des autres)
+    // Yjs -> éditeur (modifications des autres) : le delta Yjs devient une liste de changements
+    // CodeMirror (positions de l'ancien document), appliquée en une seule transaction.
     s.onObserve = (event) => {
       if (event.transaction.origin !== "local") {
-        s.applyingRemote = true;
-        try {
-          cm.operation(() => {
-            let index = 0;
-            for (const op of event.delta) {
-              if (op.retain != null) {
-                index += op.retain;
-              } else if (op.insert != null) {
-                const pos = cm.posFromIndex(index);
-                cm.replaceRange(op.insert, pos, pos, "yjs");
-                index += op.insert.length;
-              } else if (op.delete != null) {
-                const from = cm.posFromIndex(index);
-                const to = cm.posFromIndex(index + op.delete);
-                cm.replaceRange("", from, to, "yjs");
-              }
-            }
-          });
-        } finally {
-          s.applyingRemote = false;
+        const changes = [];
+        let index = 0;
+        for (const op of event.delta) {
+          if (op.retain != null) {
+            index += op.retain;
+          } else if (typeof op.insert === "string") {
+            changes.push({ from: index, to: index, insert: op.insert });
+          } else if (op.delete != null) {
+            changes.push({ from: index, to: index + op.delete, insert: "" });
+            index += op.delete;
+          }
+        }
+        if (changes.length) {
+          s.applyingRemote = true;
+          try {
+            cm.applyChanges(changes, "yjs");
+          } catch (err) {
+            console.error("Live : désynchronisation", err);
+            setTimeout(() => s.opts.onError?.("Live désynchronisé : rouvre le fichier."), 0);
+          } finally {
+            s.applyingRemote = false;
+          }
         }
       }
       scheduleRender(s);
@@ -345,8 +349,7 @@
   function sendCursor(s) {
     if (!s.synced || s.stopped) return;
     const { Y, ytext, cm } = s;
-    const a = cm.indexFromPos(cm.getCursor("anchor"));
-    const h = cm.indexFromPos(cm.getCursor("head"));
+    const { anchor: a, head: h } = cm.getSelectionIndexes();
     const rel = (i) =>
       Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(ytext, i));
     s.send("cursor", { name: s.name, hue: s.hue, anchor: rel(a), head: rel(h) });
@@ -363,9 +366,6 @@
     if (s.stopped) return;
     const { Y, doc, cm } = s;
 
-    s.marks.forEach((m) => m.clear());
-    s.marks = [];
-
     const abs = (relJson) => {
       try {
         const ap = Y.createAbsolutePositionFromRelativePosition(
@@ -378,31 +378,14 @@
       }
     };
 
+    const list = [];
     for (const r of s.remote.values()) {
       const a = abs(r.anchor);
       const h = abs(r.head);
       if (a == null || h == null) continue;
-
-      if (a !== h) {
-        s.marks.push(
-          cm.markText(
-            cm.posFromIndex(Math.min(a, h)),
-            cm.posFromIndex(Math.max(a, h)),
-            { css: "background:" + faded(r.hue) }
-          )
-        );
-      }
-
-      const el = document.createElement("span");
-      el.className = "remote-cursor";
-      el.style.borderLeftColor = solid(r.hue);
-      const label = document.createElement("span");
-      label.className = "remote-cursor-label";
-      label.style.background = solid(r.hue);
-      label.textContent = r.name;
-      el.appendChild(label);
-      s.marks.push(cm.setBookmark(cm.posFromIndex(h), { widget: el, insertLeft: true }));
+      list.push({ anchor: a, head: h, name: r.name, color: solid(r.hue), faded: faded(r.hue) });
     }
+    cm.setRemoteCursors(list);
   }
 
   // ---------- arrêt ----------
@@ -417,13 +400,13 @@
     clearTimeout(s.flushTimer);
     clearTimeout(s.cursorTimer);
 
-    if (s.onBefore) s.cm.off("beforeChange", s.onBefore);
+    if (s.onChange) s.cm.offDocChange(s.onChange);
     if (s.onCursor) s.cm.off("cursorActivity", s.onCursor);
     if (s.onObserve) s.ytext.unobserve(s.onObserve);
     if (s.onUpdate) s.doc.off("update", s.onUpdate);
 
-    s.marks.forEach((m) => m.clear());
-    s.cm.setOption("readOnly", false);
+    s.cm.setRemoteCursors([]);
+    s.cm.setReadOnly(false);
 
     db.removeChannel(s.channel);
     s.doc.destroy();

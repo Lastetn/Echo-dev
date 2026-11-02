@@ -27,6 +27,11 @@ body {
   height: 100%;
 }
 
+/* Hauteur réelle de l'écran (barre d'adresse mobile comprise) */
+body {
+  height: 100dvh;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -602,7 +607,8 @@ body.code-mode footer {
   min-width: 0;
 }
 
-#wsLive {
+#wsLive,
+#wsWrap {
   padding: 6px 12px;
   font-size: 0.8rem;
 
@@ -610,7 +616,8 @@ body.code-mode footer {
   border: 1px solid var(--border);
 }
 
-#wsLive.on {
+#wsLive.on,
+#wsWrap.on {
   background: #16a34a;
   border-color: #16a34a;
 }
@@ -660,22 +667,167 @@ body.code-mode footer {
   color: var(--text-secondary);
 }
 
-#wsStatus.error { color: #f87171; }
+#wsBuild {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+#wsStatus.error { color: #f87171; white-space: normal; overflow: visible; }
 #wsStatus.ok { color: #4ade80; }
 
 #wsEditor {
+  --ws-font: 13px; /* taille du code : à ajuster ici */
   position: relative;
   flex: 1;
   min-height: 0;
+
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-#wsEditor .CodeMirror {
+/* Éditeur CodeMirror 6 */
+
+/* CodeMirror 6 impose position: relative : l'éditeur remplit son parent grâce au flex, pas à "absolute" */
+#wsEditor .cm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+
+  background: var(--bg);
+  color: var(--text);
+}
+
+#wsEditor .cm-editor.cm-focused { outline: none; }
+
+/* Le "* { font-family: Inter }" global écraserait la police de l'éditeur : on la réimpose */
+#wsEditor .cm-editor,
+#wsEditor .cm-editor * {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#wsEditor .cm-scroller {
+  overflow: auto;
+  line-height: 1.5;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Sur iPhone, une taille inférieure à 16px fait zoomer la page à chaque appui : passer --ws-font à 16px si besoin */
+#wsEditor .cm-content,
+#wsEditor .cm-gutters {
+  font-size: var(--ws-font);
+}
+
+#wsEditor .cm-content {
+  -webkit-user-select: text;
+  user-select: text;
+  padding-bottom: 30vh; /* on peut faire défiler au-delà de la dernière ligne (clavier) */
+}
+
+#wsEditor .cm-content ::selection {
+  background: rgba(109, 93, 252, 0.45);
+}
+
+#wsEditor .cm-gutters {
+  background: var(--bg);
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border);
+}
+
+#wsEditor .cm-activeLine { background: rgba(255, 255, 255, 0.04); }
+#wsEditor .cm-activeLineGutter { background: rgba(255, 255, 255, 0.06); }
+
+@media (min-width: 800px) {
+  #wsEditor .cm-content,
+  #wsEditor .cm-gutters { font-size: 14px; }
+  #wsEditor .cm-content { padding-bottom: 8px; }
+}
+
+/* Recherche (Ctrl/Cmd + F) */
+
+#wsEditor .cm-panels {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+#wsEditor .cm-panel.cm-search { padding: 8px 10px; }
+
+#wsEditor .cm-panel.cm-search input,
+#wsEditor .cm-panel.cm-search button {
+  flex: none;
+  margin: 2px 4px 2px 0;
+  padding: 6px 10px;
+  font-size: 16px;
+  border-radius: 8px;
+}
+
+#wsEditor .cm-panel.cm-search input {
+  background: var(--surface-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+/* Éditeur de secours (si CodeMirror 6 ne se charge pas) */
+
+#wsEditor .ws-fallback {
   position: absolute;
   inset: 0;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px 30vh;
+
+  background: var(--bg);
+  color: var(--text);
+
+  border: none;
+  outline: none;
+  resize: none;
+
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 14px;
+  font-size: var(--ws-font);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
 }
+
+#wsEditor .ws-fallback-note {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  max-width: 90%;
+  padding: 2px 8px;
+
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-secondary);
+
+  font-size: 11px;
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 2;
+}
+
+@media (min-width: 800px) {
+  #wsEditor .ws-fallback { font-size: 14px; padding-bottom: 8px; }
+}
+
+/* Coloration intégrée (palette One Dark) */
+#wsEditor .cm-content .ws-c { color: #7f848e; font-style: italic; }
+#wsEditor .cm-content .ws-s { color: #98c379; }
+#wsEditor .cm-content .ws-n,
+#wsEditor .cm-content .ws-a { color: #d19a66; }
+#wsEditor .cm-content .ws-k { color: #c678dd; }
+#wsEditor .cm-content .ws-f { color: #61afef; }
+#wsEditor .cm-content .ws-t { color: #e5c07b; }
+#wsEditor .cm-content .ws-p,
+#wsEditor .cm-content .ws-tag { color: #e06c75; }
+#wsEditor .cm-content .ws-m { color: #56b6c2; }
+#wsEditor .cm-content .ws-h { color: #e06c75; font-weight: 700; }
 
 #wsProposal {
   max-height: 45vh;

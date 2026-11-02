@@ -7,7 +7,7 @@
   <script>
     // Version des fichiers : à incrémenter à chaque mise à jour pour vider le cache de la PWA
     (function () {
-      var V = "4";
+      var V = "10";
       try {
         if (localStorage.getItem("echo-v") === V) return;
         localStorage.setItem("echo-v", V);
@@ -26,9 +26,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65/theme/material-darker.css">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=10">
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#000000">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
@@ -79,6 +77,8 @@
     </div>
     <div id="wsInfo">
       <div id="wsStatus"></div>
+      <span id="wsBuild" aria-hidden="true"></span>
+      <button id="wsWrap" type="button" title="Retour à la ligne automatique" aria-label="Retour à la ligne automatique">↩</button>
       <button id="wsLive" type="button" title="Édition à plusieurs en direct">Live</button>
     </div>
     <div id="wsPeers" class="hidden"></div>
@@ -208,29 +208,494 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-  <!-- Éditeur de code (CodeMirror 5) -->
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/lib/codemirror.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/xml/xml.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/javascript/javascript.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/css/css.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/htmlmixed/htmlmixed.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/python/python.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/sql/sql.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/mode/shell/shell.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/addon/edit/closebrackets.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65/addon/edit/matchbrackets.js"></script>
+  <!-- Éditeur de code (CodeMirror 6) : modules ES chargés depuis esm.sh, exposés via window.EchoCM6.
+       Les versions sont épinglées (?deps=...) pour qu'il n'y ait qu'UNE copie de @codemirror/state et view,
+       sinon CodeMirror répond "Unrecognized extension value". Les langages se chargent à la demande. -->
+  <script type="module">
+    const DEPS =
+          "?deps=@codemirror/state@6.4.1,@codemirror/view@6.26.3,@codemirror/language@6.10.1," +
+      "@lezer/common@1.2.1,@lezer/highlight@1.2.0,@lezer/lr@1.4.1," +
+      "@codemirror/autocomplete@6.16.0,@codemirror/commands@6.5.0,@codemirror/search@6.5.6";
+    // Deux sources : esm.sh (versions épinglées) puis jsDelivr (dernières versions, cohérentes entre elles)
+    const SOURCES = [
+      {
+        name: "esm.sh",
+        url: (pkg, version, pinned = true) => "https://esm.sh/" + pkg + "@" + version + (pinned ? DEPS : ""),
+        shell: "https://esm.sh/@codemirror/legacy-modes@6.4.0/mode/shell",
+      },
+      {
+        name: "jsdelivr",
+        url: (pkg) => "https://cdn.jsdelivr.net/npm/" + pkg + "/+esm",
+        shell: "https://cdn.jsdelivr.net/npm/@codemirror/legacy-modes/mode/shell.js/+esm",
+      },
+    ];
+
+    // ---- Coloration intégrée (sans dépendance) : sert tout de suite, et de repli si le pack de langage ne charge pas ----
+    // tokenize(texte, extension, profondeur) -> [[début, fin, classe], ...] sans chevauchement
+    const WORDS = (s) => new Set(s.split(" "));
+    const KW_JS = WORDS("break case catch class const continue debugger default delete do else export extends finally for from function if import in instanceof let new of return super switch this throw try typeof var void while with yield async await static enum implements interface");
+    const KW_PY = WORDS("and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield self");
+    const KW_SH = WORDS("if then else elif fi for while do done case esac function in echo cd export local return exit set unset source");
+    const KW_SQL = WORDS("select from where insert into values update set delete create table alter drop index join left right inner outer on group by order having limit offset as and or not null is in like distinct union all primary key foreign references default unique case when then else end begin commit rollback grant revoke policy using with check returns function trigger view");
+    const ATOM_JS = WORDS("true false null undefined NaN Infinity");
+    const ATOM_PY = WORDS("True False None");
+    const FAMILIES = {
+      js: "c", jsx: "c", mjs: "c", cjs: "c", ts: "c", tsx: "c", json: "c", java: "c", c: "c", cpp: "c", h: "c", cs: "c", go: "c", rs: "c", php: "c", kt: "c", swift: "c",
+      py: "py", sh: "sh", bash: "sh", yml: "sh", yaml: "sh", toml: "sh",
+      sql: "sql", css: "css", scss: "css",
+      html: "html", htm: "html", xml: "html", svg: "html", vue: "html",
+      md: "md",
+    };
+    const hasSimple = (ext) => Boolean(FAMILIES[ext]);
+
+    function tokenize(text, ext, depth0 = 0) {
+      const out = [];
+      const add = (from, to, cls) => { if (to > from) out.push([from, to, cls]); };
+      const fam = FAMILIES[ext];
+      if (!fam) return out;
+      let m;
+
+      if (fam === "c" || fam === "py" || fam === "sh" || fam === "sql") {
+        const isJson = ext === "json";
+        const kw = fam === "py" ? KW_PY : fam === "sh" ? KW_SH : fam === "sql" ? KW_SQL : isJson ? new Set() : KW_JS;
+        const atoms = fam === "py" ? ATOM_PY : fam === "c" ? ATOM_JS : new Set();
+        const re =
+          fam === "c"
+            ? /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|`(?:[^`\\]|\\[\s\S])*`?)|(0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([A-Za-z_$][\w$]*)(\s*\()?/g
+            : fam === "py"
+            ? /(#[^\n]*)|("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)|(0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(@?[A-Za-z_][\w]*)(\s*\()?/g
+            : fam === "sh"
+            ? /(#[^\n]*)|("(?:[^"\\]|\\[\s\S])*"?|'[^']*'?)|(\d+(?:\.\d+)?)|(\$\{?[A-Za-z_]\w*\}?|\$[0-9@#?*!$-]|[A-Za-z_][\w-]*)(\s*\()?/g
+            : /(--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|('(?:[^']|'')*'?|"[^"\n]*"?)|(\d+(?:\.\d+)?)|([A-Za-z_][\w]*)(\s*\()?/g;
+        const colon = /\s*:/y;
+        while ((m = re.exec(text))) {
+          const s = m.index;
+          const e = s + m[0].length;
+          if (m[1] !== undefined) add(s, e, "ws-c");
+          else if (m[2] !== undefined) {
+            let cls = "ws-s";
+            if (isJson) { colon.lastIndex = e; if (colon.test(text)) cls = "ws-p"; }
+            add(s, e, cls);
+          } else if (m[3] !== undefined) add(s, e, "ws-n");
+          else if (m[4] !== undefined) {
+            const w = m[4];
+            const word = fam === "sql" ? w.toLowerCase() : w;
+            const wEnd = s + w.length;
+            if (w[0] === "$" && fam === "sh") add(s, wEnd, "ws-p");
+            else if (w[0] === "@" && fam === "py") add(s, wEnd, "ws-m");
+            else if (kw.has(word)) add(s, wEnd, "ws-k");
+            else if (atoms.has(w)) add(s, wEnd, "ws-a");
+            else if (m[5] !== undefined) add(s, wEnd, "ws-f");
+            else if (fam !== "sql" && fam !== "sh" && /^[A-Z]/.test(w) && w.length > 1) add(s, wEnd, "ws-t");
+          }
+        }
+        return out;
+      }
+
+      if (fam === "css") {
+        const re = /(\/\*[\s\S]*?(?:\*\/|$))|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)|(@[\w-]+)|(#[0-9a-fA-F]{3,8}\b)|(-?\d*\.?\d+(?:%|[a-zA-Z]+)?)|(!important)|([.#][A-Za-z_-][\w-]*)|([A-Za-z_-][\w-]*)|([{}])/g;
+        const colon = /\s*:(?!:)/y;
+        let depth = depth0;
+        while ((m = re.exec(text))) {
+          const s = m.index;
+          const e = s + m[0].length;
+          if (m[1] !== undefined) add(s, e, "ws-c");
+          else if (m[2] !== undefined) add(s, e, "ws-s");
+          else if (m[3] !== undefined) add(s, e, "ws-m");
+          else if (m[4] !== undefined) add(s, e, depth > 0 ? "ws-n" : "ws-t");
+          else if (m[5] !== undefined) add(s, e, "ws-n");
+          else if (m[6] !== undefined) add(s, e, "ws-k");
+          else if (m[7] !== undefined) add(s, e, depth > 0 ? "" : "ws-t");
+          else if (m[8] !== undefined) {
+            if (depth > 0) {
+              colon.lastIndex = e;
+              if (colon.test(text)) add(s, e, "ws-p");
+              else if (text[e] === "(") add(s, e, "ws-f");
+            } else add(s, e, "ws-tag");
+          } else if (m[9] === "{") depth++;
+          else if (m[9] === "}") depth = Math.max(0, depth - 1);
+        }
+        return out.filter((t) => t[2]);
+      }
+
+      if (fam === "html") {
+        const re = /(<!--[\s\S]*?(?:-->|$))|(<\/?[A-Za-z][\w:-]*)|(\/?>)|("[^"]*"?|'[^']*'?)|([A-Za-z_:@][\w:.@-]*)(?==)|(&#?\w+;)/g;
+        let inTag = false;
+        let tagName = "";
+        let closing = false;
+        while ((m = re.exec(text))) {
+          const s = m.index;
+          const e = s + m[0].length;
+          if (m[1] !== undefined) add(s, e, "ws-c");
+          else if (m[2] !== undefined) { inTag = true; closing = m[2][1] === "/"; tagName = m[2].replace(/^<\/?/, "").toLowerCase(); add(s, e, "ws-tag"); }
+          else if (m[3] !== undefined) {
+            add(s, e, "ws-tag");
+            const wasOpen = inTag;
+            inTag = false;
+            // contenu d'un <script> ou <style> : coloré comme du JS ou du CSS
+            if (wasOpen && !closing && m[3] === ">" && (tagName === "script" || tagName === "style")) {
+              let end = text.toLowerCase().indexOf("</" + tagName, e);
+              if (end === -1) end = text.length;
+              const inner = tokenize(text.slice(e, end), tagName === "script" ? "js" : "css");
+              for (const t of inner) add(t[0] + e, t[1] + e, t[2]);
+              re.lastIndex = end;
+            }
+          } else if (m[4] !== undefined) {
+            if (inTag) add(s, e, "ws-s");
+            else re.lastIndex = s + 1; // guillemet dans du texte : on ne l'interprète pas comme une chaîne
+          } else if (inTag && m[5] !== undefined) add(s, e, "ws-p");
+          else if (!inTag && m[6] !== undefined) add(s, e, "ws-n");
+        }
+        return out;
+      }
+
+      if (fam === "md") {
+        const re = /^(#{1,6}\s.*)$|^(\s*(?:```|~~~).*)$|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]*\]\([^)\n]*\))|^(\s*(?:[-*+]|\d+\.)\s)/gm;
+        while ((m = re.exec(text))) {
+          const s = m.index;
+          const e = s + m[0].length;
+          if (m[1] !== undefined) add(s, e, "ws-h");
+          else if (m[2] !== undefined) add(s, e, "ws-m");
+          else if (m[3] !== undefined) add(s, e, "ws-s");
+          else if (m[4] !== undefined) add(s, e, "ws-k");
+          else if (m[5] !== undefined) add(s, e, "ws-f");
+          else if (m[6] !== undefined) add(s, e, "ws-m");
+        }
+      }
+      return out;
+    }
+
+    async function boot(src) {
+        const url = src.url;
+
+        const [state, view, commands, language, autocomplete, search, theme] = await Promise.all([
+          import(url("@codemirror/state", "6.4.1", false)),
+          import(url("@codemirror/view", "6.26.3")),
+          import(url("@codemirror/commands", "6.5.0")),
+          import(url("@codemirror/language", "6.10.1")),
+          import(url("@codemirror/autocomplete", "6.16.0")),
+          import(url("@codemirror/search", "6.5.6")),
+          import(url("@codemirror/theme-one-dark", "6.1.2")),
+        ]);
+
+        const { EditorState, Compartment, Annotation, Transaction, StateField, StateEffect } = state;
+        const { EditorView, Decoration, ViewPlugin, WidgetType, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars } = view;
+        const { defaultKeymap, history, historyKeymap, indentWithTab } = commands;
+        const { indentUnit, bracketMatching, indentOnInput, StreamLanguage } = language;
+        const { closeBrackets, closeBracketsKeymap } = autocomplete;
+        const { searchKeymap } = search;
+        const oneDark = theme.oneDark;
+
+        // Langages : chargés au premier fichier de ce type
+        const L = (pkg, version) => import(url(pkg, version));
+        const LANGS = {
+          js: () => L("@codemirror/lang-javascript", "6.2.2").then((m) => m.javascript()),
+          jsx: () => L("@codemirror/lang-javascript", "6.2.2").then((m) => m.javascript({ jsx: true })),
+          ts: () => L("@codemirror/lang-javascript", "6.2.2").then((m) => m.javascript({ typescript: true })),
+          tsx: () => L("@codemirror/lang-javascript", "6.2.2").then((m) => m.javascript({ jsx: true, typescript: true })),
+          json: () => L("@codemirror/lang-json", "6.0.1").then((m) => m.json()),
+          html: () => L("@codemirror/lang-html", "6.4.9").then((m) => m.html()),
+          css: () => L("@codemirror/lang-css", "6.2.1").then((m) => m.css()),
+          xml: () => L("@codemirror/lang-xml", "6.1.0").then((m) => m.xml()),
+          py: () => L("@codemirror/lang-python", "6.1.6").then((m) => m.python()),
+          sql: () => L("@codemirror/lang-sql", "6.6.4").then((m) => m.sql()),
+          md: () => L("@codemirror/lang-markdown", "6.2.5").then((m) => m.markdown()),
+          sh: () =>
+            import(src.shell).then((m) =>
+              StreamLanguage.define(m.shell)
+            ),
+        };
+        LANGS.mjs = LANGS.cjs = LANGS.js;
+        LANGS.htm = LANGS.html;
+        LANGS.scss = LANGS.css;
+        LANGS.svg = LANGS.xml;
+        const langCache = new Map();
+        const loadLang = (ext) => {
+          if (!LANGS[ext]) return null;
+          if (!langCache.has(ext)) langCache.set(ext, LANGS[ext]());
+          return langCache.get(ext);
+        };
+
+        // Plugin de coloration intégrée : colore seulement la partie visible de l'écran
+        const markCache = {};
+        const mark = (cls) => markCache[cls] || (markCache[cls] = Decoration.mark({ class: cls }));
+        const simpleHighlighter = (ext) =>
+          ViewPlugin.fromClass(
+            class {
+              constructor(v) { this.decorations = this.build(v); }
+              update(u) { if (u.docChanged || u.viewportChanged) this.decorations = this.build(u.view); }
+              build(v) {
+                const doc = v.state.doc;
+                const ranges = [];
+                for (const { from, to } of v.visibleRanges) {
+                  const start = doc.lineAt(Math.max(0, from - 20000)).from;
+                  const end = doc.lineAt(Math.min(doc.length, to)).to;
+                  let depth = 0;
+                  if (ext === "css" || ext === "scss") {
+                    for (const ch of doc.sliceString(0, start)) { if (ch === "{") depth++; else if (ch === "}" && depth) depth--; }
+                  }
+                  for (const [a, b, cls] of tokenize(doc.sliceString(start, end), ext, depth)) {
+                    if (b + start > from && a + start < to) ranges.push(mark(cls).range(a + start, b + start));
+                  }
+                }
+                return Decoration.set(ranges, true);
+              }
+            },
+            { decorations: (pl) => pl.decorations }
+          );
+
+        // ---- curseurs et sélections des autres (live) : décorations qui suivent les modifications ----
+        const setRemote = StateEffect.define();
+        const remoteField = StateField.define({
+          create: () => Decoration.none,
+          update(deco, tr) {
+            deco = deco.map(tr.changes);
+            for (const e of tr.effects) if (e.is(setRemote)) deco = e.value;
+            return deco;
+          },
+          provide: (f) => EditorView.decorations.from(f),
+        });
+
+        class RemoteCursor extends WidgetType {
+          constructor(name, color) {
+            super();
+            this.name = name;
+            this.color = color;
+          }
+          eq(other) {
+            return other.name === this.name && other.color === this.color;
+          }
+          toDOM() {
+            const el = document.createElement("span");
+            el.className = "remote-cursor";
+            el.style.borderLeftColor = this.color;
+            const label = document.createElement("span");
+            label.className = "remote-cursor-label";
+            label.style.background = this.color;
+            label.textContent = this.name;
+            el.appendChild(label);
+            return el;
+          }
+          ignoreEvent() {
+            return true;
+          }
+        }
+
+        // Crée l'éditeur et renvoie l'interface utilisée par workspace.js et collab.js.
+        // Les positions sont toujours des indices (0 = début du fichier).
+        function create(parent, opts = {}) {
+          const langComp = new Compartment();
+          const histComp = new Compartment();
+          const roComp = new Compartment();
+          const wrapComp = new Compartment();
+          const simpleComp = new Compartment();
+          const originAnn = Annotation.define();
+          const listeners = { change: [], cursorActivity: [], docChange: [] };
+          let langToken = 0;
+          let editor = null;
+
+          const onUpdate = EditorView.updateListener.of((u) => {
+            if (u.docChanged) {
+              if (listeners.docChange.length) {
+                // Transaction par transaction : positions exactes de l'ancien document
+                for (const tr of u.transactions) {
+                  if (!tr.docChanged) continue;
+                  const origin = tr.annotation(originAnn) || "user";
+                  const changes = [];
+                  tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+                    changes.push({ from: fromA, to: toA, insert: inserted.toString() });
+                  });
+                  for (const fn of [...listeners.docChange]) fn(changes, origin);
+                }
+              }
+              for (const fn of [...listeners.change]) fn(api);
+            }
+            if ((u.selectionSet || u.docChanged) && listeners.cursorActivity.length) {
+              for (const fn of [...listeners.cursorActivity]) fn(api);
+            }
+          });
+
+          editor = new EditorView({
+            parent,
+            state: EditorState.create({
+              doc: "",
+              extensions: [
+                lineNumbers(),
+                highlightActiveLineGutter(),
+                highlightSpecialChars(),
+                histComp.of(history()),
+                indentUnit.of("  "),
+                EditorState.tabSize.of(2),
+                bracketMatching(),
+                closeBrackets(),
+                indentOnInput(),
+                highlightActiveLine(),
+                wrapComp.of([]), // retour à la ligne : désactivé par défaut (bouton ↩)
+                simpleComp.of([]),
+                // Pas de correction auto / majuscule auto / suggestions : c'est ce qui faisait sauter les mots sur mobile
+                EditorView.contentAttributes.of({
+                  autocorrect: "off",
+                  autocapitalize: "off",
+                  autocomplete: "off",
+                  spellcheck: "false",
+                  "aria-label": "Éditeur de code",
+                }),
+                keymap.of([
+                  { key: "Mod-s", preventDefault: true, run: () => { opts.onSave?.(); return true; } },
+                  ...closeBracketsKeymap,
+                  ...defaultKeymap,
+                  ...searchKeymap,
+                  ...historyKeymap,
+                  indentWithTab,
+                ]),
+                search.search({ top: true }),
+                oneDark,
+                roComp.of(EditorState.readOnly.of(false)),
+                remoteField,
+                langComp.of([]),
+                onUpdate,
+              ],
+            }),
+          });
+
+          const api = {
+            view: editor,
+
+            getValue: () => editor.state.doc.toString(),
+
+            // Remplacement complet par le code (chargement d'un fichier) : jamais dans l'historique d'annulation
+            setValue(text) {
+              editor.dispatch({
+                changes: { from: 0, to: editor.state.doc.length, insert: text },
+                selection: { anchor: 0 },
+                annotations: [originAnn.of("setValue"), Transaction.addToHistory.of(false)],
+              });
+              editor.scrollDOM.scrollTop = 0;
+              editor.scrollDOM.scrollLeft = 0;
+            },
+
+            clearHistory() {
+              editor.dispatch({ effects: histComp.reconfigure([]) });
+              editor.dispatch({ effects: histComp.reconfigure(history()) });
+            },
+
+            // Colorisation d'après l'extension du fichier ("" = aucune)
+            // La coloration intégrée s'applique tout de suite et reste ; le pack de langage s'y ajoute (indentation).
+            setLanguage(path) {
+              const ext = path && path.includes(".") ? path.split(".").pop().toLowerCase() : "";
+              const token = ++langToken;
+              const simple = hasSimple(ext);
+              editor.dispatch({ effects: [langComp.reconfigure([]), simpleComp.reconfigure(simple ? simpleHighlighter(ext) : [])] });
+              const report = (info) => { try { opts.onLanguage?.({ ext, ...info }); } catch (_) {} };
+              const p = loadLang(ext);
+              if (!p) return report({ mode: simple ? "simple" : "none" });
+              p.then((support) => {
+                if (token !== langToken) return;
+                // On GARDE la coloration intégrée : le pack n'apporte ici que l'indentation intelligente
+                // (ses couleurs ne s'affichaient pas sur certains appareils et faisaient disparaître les nôtres)
+                editor.dispatch({ effects: langComp.reconfigure(support) });
+                report({ mode: simple ? "simple" : "pack" });
+              }).catch((err) => {
+                console.warn("Pack de langage indisponible :", ext, err);
+                if (token === langToken) report({ mode: simple ? "simple" : "none", error: String((err && err.message) || err) });
+              });
+            },
+
+            // Retour à la ligne automatique (désactivé par défaut : défilement horizontal)
+            setWrap(on) {
+              editor.dispatch({ effects: wrapComp.reconfigure(on ? EditorView.lineWrapping : []) });
+            },
+
+            refresh: () => editor.requestMeasure(),
+            focus: () => editor.focus(),
+
+            // "change" : après toute modification du texte ; "cursorActivity" : curseur ou texte qui bouge
+            on(type, fn) { (listeners[type] ??= []).push(fn); },
+            off(type, fn) { listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn); },
+
+            // ---- pour le live (collab.js) ----
+            // fn(changes, origin) : changes = [{ from, to, insert }] dans les positions du document avant la modification
+            onDocChange(fn) { listeners.docChange.push(fn); },
+            offDocChange(fn) { listeners.docChange = listeners.docChange.filter((f) => f !== fn); },
+
+            // Applique des changements venus de l'extérieur : pas dans l'historique, sinon "annuler" défait les frappes des autres
+            applyChanges(changes, origin) {
+              editor.dispatch({
+                changes,
+                annotations: [originAnn.of(origin || "program"), Transaction.addToHistory.of(false)],
+              });
+            },
+
+            setReadOnly(on) {
+              editor.dispatch({ effects: roComp.reconfigure(EditorState.readOnly.of(Boolean(on))) });
+            },
+
+            getSelectionIndexes() {
+              const r = editor.state.selection.main;
+              return { anchor: r.anchor, head: r.head };
+            },
+
+            // list = [{ anchor, head, name, color, faded }] : curseur + sélection de chaque collaborateur
+            setRemoteCursors(list) {
+              const len = editor.state.doc.length;
+              const clamp = (i) => Math.max(0, Math.min(i, len));
+              const ranges = [];
+              for (const r of list) {
+                const a = clamp(r.anchor);
+                const h = clamp(r.head);
+                if (a !== h) {
+                  ranges.push(
+                    Decoration.mark({ attributes: { style: "background:" + r.faded } }).range(
+                      Math.min(a, h),
+                      Math.max(a, h)
+                    )
+                  );
+                }
+                ranges.push(Decoration.widget({ widget: new RemoteCursor(r.name, r.color), side: 1 }).range(h));
+              }
+              editor.dispatch({ effects: setRemote.of(Decoration.set(ranges, true)) });
+            },
+          };
+          return api;
+        }
+
+        window.EchoCM6 = { create };
+        window.dispatchEvent(new Event("cm6-ready"));
+    }
+
+    (async () => {
+      let lastErr;
+      for (const src of SOURCES) {
+        try {
+          await boot(src);
+          console.info("CodeMirror 6 chargé depuis " + src.name);
+          return;
+        } catch (err) {
+          lastErr = err;
+          console.warn("CodeMirror 6 : source " + src.name + " indisponible", err);
+        }
+      }
+      console.error("CodeMirror 6 n'a pas pu se charger :", lastErr);
+      window.EchoCM6Error = lastErr;
+      window.dispatchEvent(new Event("cm6-error"));
+    })();
+  </script>
 
   <!-- Yjs (fusion des modifications en direct) : chargé en module puis exposé en global -->
   <script type="module">
-    import * as Y from "https://esm.sh/yjs@13";
-    window.Y = Y;
-    window.dispatchEvent(new Event("yjs-ready"));
+    import("https://esm.sh/yjs@13")
+      .catch(() => import("https://cdn.jsdelivr.net/npm/yjs@13/+esm"))
+      .then((Y) => {
+        window.Y = Y;
+        window.dispatchEvent(new Event("yjs-ready"));
+      })
+      .catch((err) => console.error("Yjs n'a pas pu se charger :", err));
   </script>
 
-  <script src="script.js?v=4"></script>
-  <script src="collab.js?v=4"></script>
-  <script src="workspace.js?v=4"></script>
-  <script src="push.js?v=4"></script>
+  <script src="script.js?v=10"></script>
+  <script src="collab.js?v=10"></script>
+  <script src="workspace.js?v=10"></script>
+  <script src="push.js?v=10"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
