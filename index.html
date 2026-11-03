@@ -55,6 +55,7 @@
       <input type="password" id="passwordInput" placeholder="Mot de passe (6 caractères min.)" required autocomplete="current-password">
       <button type="submit">Se connecter</button>
       <button type="button" id="signupBtn" class="secondary">Créer un compte</button>
+      <button type="button" id="installAppBtn" class="secondary" style="display:none">📲 Installer l'application</button>
       <p id="loginError" class="error"></p>
     </form>
   </div>
@@ -702,6 +703,42 @@
         navigator.serviceWorker.register('./service-worker.js');
       });
     }
+  </script>
+  <script>
+(function () {
+  const btn = document.getElementById('installAppBtn');
+  if (!btn) return;
+
+  const isAndroid = /android/i.test(navigator.userAgent);
+  const isStandalone =
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+
+  // Pas Android, ou déjà installée : on ne montre rien
+  if (!isAndroid || isStandalone) return;
+
+  let deferredPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); // on garde l'événement pour le déclencher nous-mêmes
+    deferredPrompt = e;
+    btn.style.display = 'block';
+  });
+
+  btn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log('Installation :', outcome);
+    deferredPrompt = null;
+    btn.style.display = 'none';
+  });
+
+  window.addEventListener('appinstalled', () => {
+    deferredPrompt = null;
+    btn.style.display = 'none';
+  });
+})();
   </script>
 </body>
 </html>
