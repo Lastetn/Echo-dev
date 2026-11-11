@@ -1,69 +1,107 @@
-const VAPID_PUBLIC_KEY = "BLLAtRppKBU-vEmLNxn4y13nYLW3l7XYKRg11Ud99btsfFT7BoBEJy8DcI94PsFt6PKChh8FSPuLev6yZs8eDls";
+const CACHE_VERSION = 'echodev-v4'; // à incrémenter à chaque modif des assets
+const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
-const notifBtn = document.getElementById("notifBtn");
-const pushSupported =
-  "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const STATIC_ASSETS = [
+  './',
+  './index.html',
+  './style.css',
+  './script.js',
+  './collab.js',
+  './workspace.js',
+  './push.js',
+  './manifest.json',
+];
 
-function isIOS() {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(STATIC_CACHE)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
+  );
+});
 
-function isStandalone() {
-  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-}
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(
+        keys
+          .filter((key) => key.startsWith('echodev-') && key !== STATIC_CACHE)
+          .map((key) => caches.delete(key))
+      ))
+      .then(() => self.clients.claim())
+  );
+});
 
-function urlBase64ToUint8Array(b64) {
-  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-  const base64 = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
-}
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
-// Doit être appelée depuis un clic (exigence iOS et Chrome)
-async function enablePush() {
-  if (!pushSupported) throw new Error("Les notifications ne sont pas supportées sur ce navigateur.");
-
-  if (isIOS() && !isStandalone()) {
-    throw new Error(
-      "Sur iPhone : touche Partager → « Sur l'écran d'accueil », puis ouvre Echo dev depuis cette icône."
-    );
-  }
-
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") throw new Error("Notifications refusées.");
-
-  const reg = await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-    });
-  }
-
-  const json = sub.toJSON();
-  const { error } = await db.rpc("register_push", {
-    p_endpoint: json.endpoint,
-    p_p256dh: json.keys.p256dh,
-    p_auth: json.keys.auth,
-  });
-  if (error) throw error;
-}
-
-function refreshNotifBtn() {
-  if (!pushSupported) return notifBtn.classList.add("hidden");
-  notifBtn.classList.toggle("hidden", Notification.permission === "granted");
-}
-
-notifBtn.addEventListener("click", async () => {
-  try {
-    await enablePush();
-    refreshNotifBtn();
-    alert("Notifications activées sur cet appareil.");
-  } catch (err) {
-    alert(err.message ?? String(err));
+  if (req.mode === 'navigate') {
+    event.respondWith(networkFirst(req));
+  } else {
+    event.respondWith(staleWhileRevalidate(event, req));
   }
 });
 
-refreshNotifBtn();
+// ===== NOTIFICATIONS PUSH =====
+// Toujours afficher une notif à chaque push : Safari (iPhone) révoque la permission sinon.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (_) {}
+
+  const title = data.title || 'Echo dev';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      tag: data.tag || 'echodev',   // remplace la notif précédente du même tag
+      renotify: true,
+      data: { url: data.url || './' },
+    })
+  );
+});
+
+// Résout par rapport au scope du SW (ex. https://lastetn.github.io/echo-dev/), pas à la racine du domaine
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || './', self.registration.scope).href;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if (client.url.startsWith(self.registration.scope) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
+});
+
+// Pages : réseau d'abord, cache en secours (hors ligne)
+async function networkFirst(req) {
+  const cache = await caches.open(STATIC_CACHE);
+  try {
+    const res = await fetch(req);
+    if (res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    return (await cache.match(req)) || (await cache.match('./index.html')) || Response.error();
+  }
+}
+
+// Assets : réponse immédiate depuis le cache, mise à jour en arrière-plan
+async function staleWhileRevalidate(event, req) {
+  const cache = await caches.open(STATIC_CACHE);
+  const cached = await cache.match(req);
+  const update = fetch(req)
+    .then((res) => {
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    })
+    .catch(() => null);
+  event.waitUntil(update);
+  return cached || (await update) || Response.error();
+}
