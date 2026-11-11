@@ -55,7 +55,7 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(title, {
       body: data.body || '',
       icon: './icons/icon-192.png',
-      badge: './icons/icon-192.png',
+      badge: './icons/badge-92.png',
       tag: data.tag || 'echodev',   // remplace la notif précédente du même tag
       renotify: true,
       data: { url: data.url || './' },
