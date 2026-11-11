@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'echodev-v3'; // à incrémenter à chaque modif des assets
+const CACHE_VERSION = 'echodev-v4'; // à incrémenter à chaque modif des assets
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
 const STATIC_ASSETS = [
@@ -10,6 +10,8 @@ const STATIC_ASSETS = [
   './workspace.js',
   './push.js',
   './manifest.json',
+  './icons/icon-192.png',
+  './icons/badge-96.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -55,7 +57,7 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(title, {
       body: data.body || '',
       icon: './icons/icon-192.png',
-      badge: './icons/badge-92.png',
+      badge: './icons/badge-96.png',
       tag: data.tag || 'echodev',   // remplace la notif précédente du même tag
       renotify: true,
       data: { url: data.url || './' },
@@ -63,14 +65,15 @@ self.addEventListener('push', (event) => {
   );
 });
 
+// Résout par rapport au scope du SW (ex. https://lastetn.github.io/echo-dev/), pas à la racine du domaine
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || './', self.location.origin).href;
+  const target = new URL(event.notification.data?.url || './', self.registration.scope).href;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
-        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+        if (client.url.startsWith(self.registration.scope) && 'focus' in client) {
           return client.focus();
         }
       }
