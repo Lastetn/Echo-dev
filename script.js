@@ -268,7 +268,50 @@ function subscribe() {
     })
     .subscribe((status) => {
       roomReady = status === "SUBSCRIBED";
+      // Connecté : on rattrape les messages manqués pendant la coupure
+      if (roomReady) fetchMissed();
+      // Connexion tombée : on relance le canal après quelques secondes
+      if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
+        setTimeout(reconnect, 3000);
+      }
     });
+}
+
+// Recrée le canal temps réel (il meurt souvent quand l'appli passe en arrière-plan)
+function reconnect() {
+  if (!started || !channelId) return;
+  if (subscription) db.removeChannel(subscription);
+  subscription = null;
+  roomReady = false;
+  subscribe();
+}
+
+// Récupère les messages arrivés après le dernier message affiché
+async function fetchMissed() {
+  if (!started || !channelId) return;
+  let last = null;
+  for (const m of byId.values()) {
+    if (!last || m.created_at > last) last = m.created_at;
+  }
+
+  let q = db
+    .from("messages")
+    .select("id, author_id, role, content, created_at, reply_to, edited_at")
+    .eq("channel_id", channelId)
+    .order("created_at", { ascending: true })
+    .limit(100);
+  if (last) q = q.gt("created_at", last);
+
+  const { data, error } = await q;
+  if (error) return;
+  (data ?? []).forEach((m) => addMessage(m, true));
+}
+
+// Au retour dans l'appli : relance le canal (souvent mort) et rattrape les messages
+function resyncOnReturn() {
+  if (!started) return;
+  reconnect();
+  fetchMissed();
 }
 
 function sendTypingEvent(on, key, name, ai = false) {
@@ -575,14 +618,19 @@ messagesEl.addEventListener(
   },
   { passive: true }
 );
+
+// Retour dans l'appli : on relance le canal temps réel et on rattrape les messages manqués
 document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) resyncOnReturn();
   markSeen();
   updateUnreadUI();
 });
 window.addEventListener("focus", () => {
+  resyncOnReturn();
   markSeen();
   updateUnreadUI();
 });
+window.addEventListener("online", resyncOnReturn);
 
 // Changement d'onglet Chat <-> Code (la classe "code-mode" est posée par workspace.js)
 new MutationObserver(() => {
