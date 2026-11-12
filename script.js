@@ -303,15 +303,23 @@ async function fetchMissed() {
   if (last) q = q.gt("created_at", last);
 
   const { data, error } = await q;
-  if (error) return;
+  if (error) {
+    console.log("[resync] erreur", error.message);
+    return;
+  }
+  console.log("[resync] messages récupérés", data?.length ?? 0);
   (data ?? []).forEach((m) => addMessage(m, true));
 }
 
-// Au retour dans l'appli : relance le canal (souvent mort) et rattrape les messages
+// Au retour dans l'appli : relance le canal et rattrape les messages, avec plusieurs tentatives
+// (le réseau met parfois quelques secondes à revenir après le déverrouillage)
 function resyncOnReturn() {
   if (!started) return;
+  console.log("[resync] retour dans l'appli");
   reconnect();
-  fetchMissed();
+  for (const delay of [0, 2000, 5000, 10000]) {
+    setTimeout(fetchMissed, delay);
+  }
 }
 
 function sendTypingEvent(on, key, name, ai = false) {
